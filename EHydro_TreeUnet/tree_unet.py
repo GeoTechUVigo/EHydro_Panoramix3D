@@ -1,35 +1,100 @@
-from .modules import *
+import torchsparse
+
+from torch import nn
+from torchsparse import nn as spnn
+
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv_op = nn.Sequential(
+            spnn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
+            spnn.BatchNorm(out_channels),
+            spnn.ReLU(inplace=True),
+            spnn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+            spnn.BatchNorm(out_channels),
+            spnn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        return self.conv_op(x)
+    
+class DownSample(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = DoubleConv(in_channels, out_channels)
+        self.pool = nn.Sequential(
+            spnn.Conv3d(out_channels, out_channels, kernel_size=2, stride=2),
+            spnn.BatchNorm(out_channels),
+            spnn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        down = self.conv(x)
+        p = self.pool(down)
+
+        return down, p
+    
+class UpSample(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.up = nn.Sequential(
+            spnn.Conv3d(in_channels, in_channels // 2, kernel_size=2, stride=2, transposed=True, generative=False),
+            spnn.BatchNorm(in_channels // 2),
+            spnn.ReLU(inplace=True)
+        )
+        self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        x = torchsparse.cat([x1, x2])
+        
+        return self.conv(x)
+    
+class Encoder(nn.Module):
+    def __init__(self, in_channels, base_channels, deep):
+        super().__init__()
+        channels = [base_channels * (2 ** i) for i in range(deep)]
+
+        self.down_convolutions = nn.ModuleList([DownSample(in_channels, channels[0])])
+        for i in range(deep - 1):
+            self.down_convolutions.append(DownSample(channels[i], channels[i + 1]))
+
+        self.bottle_neck = DoubleConv(channels[-1], channels[-1] * 2)
+
+    def forward(self, x):
+        downs = []
+        for down_convolution in self.down_convolutions:
+            down, x = down_convolution(x)
+            downs.append(down)
+
+        downs = downs[::-1]
+        b = self.bottle_neck(x)
+        return b, downs
+    
+class Decoder(nn.Module):
+    def __init__(self, num_classes, base_channels, deep):
+        super().__init__()
+        channels = [base_channels * (2 ** i) for i in range(deep, -1, -1)]
+        
+        self.up_convolutions = nn.ModuleList([UpSample(channels[i], channels[i + 1]) for i in range(deep)])
+        self.out = spnn.Conv3d(in_channels=channels[-1], out_channels=num_classes, kernel_size=1, padding=0, stride=1)
+
+    def forward(self, b, downs):
+        for i, up_convolution in enumerate(self.up_convolutions):
+            b = up_convolution(b, downs[i])
+
+        return self.out(b)
 
 
 class UNet(nn.Module):
-    def __init__(self, in_channels, num_classes):
+    def __init__(self, in_channels, num_classes, base_channels=64, deep=4):
         super().__init__()
-        self.down_convolution_1 = DownSample(in_channels, 64)
-        self.down_convolution_2 = DownSample(64, 128)
-        self.down_convolution_3 = DownSample(128, 256)
-        self.down_convolution_4 = DownSample(256, 512)
-
-        self.bottle_neck = DoubleConv(512, 1024)
-
-        self.up_convolution_1 = UpSample(1024, 512)
-        self.up_convolution_2 = UpSample(512, 256)
-        self.up_convolution_3 = UpSample(256, 128)
-        self.up_convolution_4 = UpSample(128, 64)
-
-        self.out = spnn.Conv3d(in_channels=64, out_channels=num_classes, kernel_size=1, padding=0, stride=1)
+        self.encoder = Encoder(in_channels, base_channels, deep)
+        self.decoder = Decoder(num_classes, base_channels, deep)
 
     def forward(self, x):
-        down_1, p1 = self.down_convolution_1(x)
-        down_2, p2 = self.down_convolution_2(p1)
-        down_3, p3 = self.down_convolution_3(p2)
-        down_4, p4 = self.down_convolution_4(p3)
+        b, downs = self.encoder(x)
+        semantic = self.decoder(b, downs)
 
-        b = self.bottle_neck(p4)
-
-        up_1 = self.up_convolution_1(b, down_4)
-        up_2 = self.up_convolution_2(up_1, down_3)
-        up_3 = self.up_convolution_3(up_2, down_2)
-        up_4 = self.up_convolution_4(up_3, down_1)
-
-        out = self.out(up_4)
-        return out
+        return semantic
