@@ -56,7 +56,7 @@ class UpSampleOffset(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.up = nn.Sequential(
-            spnn.Conv3d(in_channels, in_channels // 3, kernel_size=2, stride=2, transposed=True, generative=False),
+            spnn.Conv3d((in_channels // 3) * 2, in_channels // 3, kernel_size=2, stride=2, transposed=True, generative=False),
             spnn.BatchNorm(in_channels // 3),
             spnn.ReLU(inplace=True)
         )
