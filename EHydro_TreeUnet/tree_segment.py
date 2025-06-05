@@ -98,19 +98,37 @@ class DecoderSemantic(nn.Module):
         self.out = spnn.Conv3d(in_channels=channels[-1], out_channels=num_classes, kernel_size=1, padding=0, stride=1)
 
     def forward(self, b, downs):
+        ups = []
+        for i, up_convolution in enumerate(self.up_convolutions):
+            b = up_convolution(b, downs[i])
+            ups.append(b)
+
+        return self.out(b), ups
+    
+class DecoderOffset(nn.Module):
+    def __init__(self, base_channels, depth):
+        super().__init__()
+        channels = [base_channels * (2 ** i) for i in range(depth, -1, -1)]
+        
+        self.up_convolutions = nn.ModuleList([UpSample(channels[i], channels[i + 1]) for i in range(depth)])
+        self.out = spnn.Conv3d(in_channels=channels[-1], out_channels=3, kernel_size=1, padding=0, stride=1)
+
+    def forward(self, b, downs, ups):
         for i, up_convolution in enumerate(self.up_convolutions):
             b = up_convolution(b, downs[i])
 
         return self.out(b)
     
-class UNet(nn.Module):
+class TreeSegment(nn.Module):
     def __init__(self, in_channels, num_classes, base_channels=64, depth=4):
         super().__init__()
         self.encoder = Encoder(in_channels, base_channels, depth)
-        self.decoder = DecoderSemantic(num_classes, base_channels, depth)
+        self.decoder_semantic = DecoderSemantic(num_classes, base_channels, depth)
+        self.decoder_offset = DecoderOffset(base_channels, depth)
 
     def forward(self, x):
         b, downs = self.encoder(x)
-        semantic = self.decoder(b, downs)
+        semantic, ups = self.decoder_semantic(b, downs)
+        offset = self.decoder_offset(b, downs, ups)
 
-        return semantic
+        return semantic, offset
