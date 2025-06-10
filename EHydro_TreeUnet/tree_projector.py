@@ -81,7 +81,7 @@ class PixelDecoder(nn.Module):
         lat = [latconv(f) for latconv, f in zip(self.lateral, x)]
         lat[-1] = self.smooth[-1](lat[-1])
 
-        for i in range(len(lat)-1, 0, -1):
+        for i in range(len(lat) - 1, 0, -1):
             up = self.upsample[i](lat[i])
             lat[i - 1] = lat[i - 1] + up
             lat[i - 1] = self.smooth[i - 1](lat[i - 1])
@@ -97,14 +97,7 @@ class PixelDecoderAlt(nn.Module):
             spnn.ReLU(inplace=True)
         ) for i in range(len(channels)))
 
-        self.smooth = nn.Sequential(
-            spnn.Conv3d(sum(channels) + in_channels, latent_dim, 3, padding=1, bias=False),
-            spnn.BatchNorm(latent_dim),
-            spnn.ReLU(inplace=True),
-            spnn.Conv3d(latent_dim, latent_dim, 3, padding=1, bias=False),
-            spnn.BatchNorm(latent_dim),
-            spnn.ReLU(inplace=True)
-        )
+        self.smooth = DoubleConv(sum(channels) + in_channels, latent_dim)
     
     def forward(self, x):
         for i in range(len(x)-2, -1, -1):
@@ -119,8 +112,10 @@ class TreeProjector(nn.Module):
         self.encoder = Encoder(in_channels, channels)
         self.pixel_decoder = PixelDecoderAlt(in_channels, channels, latent_dim)
         self.semantic_head = spnn.Conv3d(latent_dim, num_classes, 1, bias=False)
-        # self.instance_head = spnn.Conv3d(latent_dim, max_instances, 1, bias=False)
+        self.instance_head = spnn.Conv3d(latent_dim, max_instances, 1, bias=False)
 
     def forward(self, x):
         feats = self.pixel_decoder(self.encoder(x))
-        return self.semantic_head(feats) #, self.instance_head(feats)
+        return self.semantic_head(feats), self.instance_head(feats)
+
+        # return self.semantic_head(self.pixel_decoder(self.encoder(x)))
