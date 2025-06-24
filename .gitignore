@@ -172,7 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-.laz
-.las
-.ply
-.pth
+*.laz
+*.las
+*.ply
+*.pth
+*.npy
