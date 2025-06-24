@@ -72,6 +72,7 @@ class Encoder(nn.Module):
     def __init__(self, in_channels, base_channels, deep):
         super().__init__()
         channels = [base_channels * (2 ** i) for i in range(deep)]
+        print(channels)
 
         self.down_convolutions = nn.ModuleList([DownSample(in_channels, channels[0])])
         for i in range(deep - 1):
@@ -103,8 +104,8 @@ class DecoderSemantic(nn.Module):
 
         return self.out(b)
     
-class UNet(nn.Module):
-    def __init__(self, in_channels, num_classes, base_channels=64, depth=4):
+class TreeUNet(nn.Module):
+    def __init__(self, in_channels, num_classes, base_channels=16, depth=4):
         super().__init__()
         self.encoder = Encoder(in_channels, base_channels, depth)
         self.decoder = DecoderSemantic(num_classes, base_channels, depth)

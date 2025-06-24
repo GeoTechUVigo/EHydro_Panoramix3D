@@ -10,6 +10,7 @@ class VoxelDecoder(nn.Module):
         super().__init__()
 
         self.upsample = nn.ModuleList()
+        self.smooth = nn.ModuleList()
         for i in range(len(channels) - 1):
             out_channels = sum(channels[(i + 1):])
             conv = spnn.Conv3d(
@@ -27,8 +28,10 @@ class VoxelDecoder(nn.Module):
                 spnn.ReLU(True)
             ))
 
-        # self.smooth = DoubleConv(sum(channels), latent_dim)
-        self.smooth = nn.Sequential(
+            out_channels = sum(channels[i:])
+            self.smooth.append(SparseConvBlock(out_channels, out_channels, kernel_size=3))
+
+        self.mixer = nn.Sequential(
             SparseConvBlock(sum(channels), latent_dim, kernel_size=3),
             SparseConvBlock(latent_dim, latent_dim, kernel_size=3),
             SparseConvBlock(latent_dim, latent_dim, kernel_size=1)
@@ -38,8 +41,9 @@ class VoxelDecoder(nn.Module):
         for i in range(len(x)-2, -1, -1):
             x[-1] = self.upsample[i](x[-1])
             x[-1].F = cat([x[-1].F, x[i].F], dim=1)
+            x[-1] = self.smooth[i](x[-1])
 
-        return self.smooth(x[-1])
+        return self.mixer(x[-1])
     
     def _init_trilinear3d(self, conv):
         K = conv.kernel_size[0]
