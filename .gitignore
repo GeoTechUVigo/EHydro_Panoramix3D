@@ -172,5 +172,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-datasets/
-*.pth
+.laz
+.las
+.ply
+.pth
