@@ -1,7 +1,8 @@
+from pathlib import Path
 from EHydro_TreeUnet.trainers import TreeProjectorTrainer
 
 
-DATASET_FOLDER = '~/datasets/MixedDataset'
+DATASET_FOLDER = Path.home() / 'datasets/MixedDataset'
 FEAT_KEYS = ['intensity']
 CHANNELS = [16, 32, 64, 128]
 LATENT_DIM = 256
