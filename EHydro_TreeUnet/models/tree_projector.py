@@ -18,9 +18,9 @@ class TreeProjector(nn.Module):
 
         self.voxel_decoder = VoxelDecoder(channels, latent_dim)
         self.semantic_head = spnn.Conv3d(latent_dim, num_classes, 1, bias=False)
-        self.instance_head = spnn.Conv3d(latent_dim, max_instances, 1, bias=False)
+        # self.instance_head = spnn.Conv3d(latent_dim, max_instances, 1, bias=False)
 
     def forward(self, x):
         feats = self.voxel_decoder(self.encoder(x))
 
-        return self.semantic_head(feats), self.instance_head(feats)
+        return self.semantic_head(feats) # , self.instance_head(feats)

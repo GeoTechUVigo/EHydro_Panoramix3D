@@ -1,6 +1,7 @@
 import torch
 import torchsparse
 import pickle
+import numpy as np
 
 from torch import nn
 from torch.cuda import amp
@@ -10,6 +11,7 @@ from torch.utils.data import DataLoader
 from torchsparse.nn import functional as F
 from torchsparse.utils.collate import sparse_collate_fn
 
+from pathlib import Path
 from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
@@ -25,9 +27,13 @@ class TreeProjectorTrainer:
         self._losses = None
         self._dataset = MixedDataset(folder=dataset_folder, voxel_size=voxel_size, train_pct=train_pct, data_augmentation=data_augmentation_coef, feat_keys=feat_keys)
 
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model = TreeProjector(self._dataset.feat_channels, self._dataset.num_classes, max_instances, channels = channels, latent_dim = latent_dim)
         # self._model = TreeUNet(self._dataset.feat_channels, self._dataset.num_classes, base_channels=16, depth=4)
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        if torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs")
+            self._model = nn.DataParallel(self._model)
         
         total_params = sum(p.numel() for p in self._model.parameters())
         trainable_params = sum(p.numel() for p in self._model.parameters() if p.requires_grad)
@@ -65,28 +71,33 @@ class TreeProjectorTrainer:
         self._model.load_state_dict(torch.load('./weights/tree_unet_weights.pth'))
 
     @torch.no_grad()
-    def _apply_hungarian(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        N, K = logits.shape
+    def _apply_hungarian(self, logits, labels):
+        batch_idx = logits.C[:, 0]
+        logits = logits.F
+        K = logits.size(1)
         device = logits.device
+        remapped = torch.full_like(labels, -1)
 
-        log_p = tF.log_softmax(logits, dim=-1)
+        for b in torch.unique(batch_idx):
+            mask = batch_idx == b
+            if not mask.any():
+                continue
 
-        uniq = torch.unique(labels)
-        M    = len(uniq)
+            log_p_b = tF.log_softmax(logits[mask], dim=-1)
+            labels_b = labels[mask]
 
-        cost = torch.empty((M, K), device=device)
-        for m, g in enumerate(uniq):
-            mask = (labels == g)
-            cost[m] = -(log_p[mask].mean(0))
+            uniq = torch.unique(labels_b, sorted=True)
+            M = len(uniq)
 
-        row, col = linear_sum_assignment(cost.detach().cpu())
+            cost = torch.empty((M, K), device=device)
+            for m, g in enumerate(uniq):
+                cost[m] = -log_p_b[labels_b == g].mean(0)
 
-        remapped = torch.full_like(labels, fill_value=-1)
-        for r, c in zip(row, col):
-            g = uniq[r]
-            remapped[labels == g] = c
+            row, col = linear_sum_assignment(cost.detach().cpu())
 
-        # print(f'Originales: {torch.unique(labels)}\nRemapeadas: {torch.unique(remapped)}')
+            for r, c in zip(row, col):
+                remapped[mask & (labels == uniq[r])] = c
+
         return remapped
     
     def _criterion_instance_1d(self, instance_output, instance_labels, delta_v=0.1, delta_d=2.0, alpha=1.0, beta=1.0, gamma=1e-3):
@@ -113,11 +124,11 @@ class TreeProjectorTrainer:
             L_dist = instance_output.new_tensor(0.)
 
         L_reg = torch.abs(mu).mean()
-        return alpha*L_var + beta*L_dist + gamma*L_reg
+        return alpha * L_var + beta * L_dist + gamma * L_reg
     
     def _compute_loss(self, semantic_output, semantic_labels, instance_output = 0, instance_labels = 0):
-        loss_sem = self._criterion_semantic(semantic_output, semantic_labels)
-        loss_inst = self._criterion_instance(instance_output, self._apply_hungarian(instance_output, instance_labels))
+        loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
+        loss_inst = self._criterion_instance(instance_output.F, self._apply_hungarian(instance_output, instance_labels.F))
         # loss_inst = self._criterion_instance(instance_output, instance_labels)
         # loss_inst = 0
 
@@ -184,8 +195,8 @@ class TreeProjectorTrainer:
             with amp.autocast(enabled=True):
                 semantic_output, instance_output = self._model(inputs)
                 # semantic_output = self._model(inputs)
-                # loss = self._compute_loss(semantic_output.F, semantic_labels.F)
-                loss = self._compute_loss(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels.F)
+                # loss = self._compute_loss(semantic_output, semantic_labels)
+                loss = self._compute_loss(semantic_output, semantic_labels, instance_output, instance_labels)
                 stat = self._compute_metrics(semantic_output.F, semantic_labels.F, num_classes=self._dataset.num_classes)
 
             stats.append(stat)
@@ -202,10 +213,12 @@ class TreeProjectorTrainer:
 
             del inputs, semantic_output, semantic_labels
 
-        torch.save(self._model.state_dict(), './weights/tree_unet_weights.pth')
+        Path('./weights').mkdir(parents=False, exist_ok = True)
+        torch.save(self._model.state_dict(), './weights/tree_projector_weights.pth')
         self._stats = stats
         self._losses = losses
 
+        Path('./stats').mkdir(parents=False, exist_ok = True)
         with open('./stats/stats.pkl', 'wb') as f:
             pickle.dump(self._stats, f)
         with open('./stats/losses.pkl', 'wb') as f:
@@ -225,8 +238,8 @@ class TreeProjectorTrainer:
             for feed_dict in pbar:
                 semantic_labels_cpu = feed_dict["semantic_labels"].F.numpy()
                 instance_labels_cpu = feed_dict["instance_labels"].F.numpy()
-                coords = feed_dict["coords"].numpy()
-                inverse_map = feed_dict["inverse_map"].numpy()
+                # coords = feed_dict["coords"].numpy()
+                # inverse_map = feed_dict["inverse_map"].numpy()
 
                 inputs = feed_dict["inputs"].to(self._device)
                 semantic_labels = feed_dict["semantic_labels"].to(self._device)
@@ -235,14 +248,14 @@ class TreeProjectorTrainer:
                 with amp.autocast(enabled=True):
                     semantic_output, instance_output = self._model(inputs)
                     # semantic_output = self._model(inputs)
-                    # loss = self._compute_loss(semantic_output.F, semantic_labels.F)
-                    loss = self._compute_loss(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels.F)
+                    # loss = self._compute_loss(semantic_output, semantic_labels)
+                    loss = self._compute_loss(semantic_output, semantic_labels, instance_output, instance_labels)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, num_classes=self._dataset.num_classes)
 
                 losses.append(loss.item())
                 stats.append(stat)
 
-                voxels = semantic_output.C[:, 1:].cpu().numpy()
+                voxels = semantic_output.C.cpu().numpy()
                 semantic_output = torch.argmax(semantic_output.F.cpu(), dim=1).numpy()
                 instance_output = torch.argmax(instance_output.F.cpu(), dim=1).numpy()
                 # instance_output = np.zeros(semantic_output.shape)
@@ -256,7 +269,7 @@ class TreeProjectorTrainer:
                     'mIoU': f'{stat["miou"]:.4f}'
                 })
 
-                yield voxels, semantic_output, instance_output, semantic_labels_cpu, instance_labels_cpu, coords, inverse_map
+                yield voxels, semantic_output, instance_output, semantic_labels_cpu, instance_labels_cpu #, coords, inverse_map
         
         self._stats = stats
         self._losses = losses

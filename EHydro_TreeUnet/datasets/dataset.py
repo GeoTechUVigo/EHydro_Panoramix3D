@@ -113,4 +113,4 @@ class Dataset:
         semantic_labels = SparseTensor(coords=voxels, feats=semantic_labels)
         instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
 
-        return {"inputs": inputs, "semantic_labels": semantic_labels, "instance_labels": instance_labels, "coords": coords, "inverse_map": inverse_map}
+        return {"inputs": inputs, "semantic_labels": semantic_labels, "instance_labels": instance_labels}
