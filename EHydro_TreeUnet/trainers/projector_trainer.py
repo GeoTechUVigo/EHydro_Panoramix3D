@@ -1,18 +1,23 @@
 import torch
+
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32  = False
+
 import torchsparse
 import pickle
 import numpy as np
+import matplotlib.pyplot as plt
 
 from torch import nn
 from torch.cuda import amp
 from torch.nn import functional as tF
 from torch.utils.data import DataLoader
 
-from torchsparse.nn import functional as F
 from torchsparse.utils.collate import sparse_collate_fn
 
 from pathlib import Path
 from scipy.optimize import linear_sum_assignment
+from sklearn.cluster import DBSCAN
 from tqdm import tqdm
 
 from ..datasets import MixedDataset
@@ -21,7 +26,7 @@ from ..models import TreeProjector
 
 class TreeProjectorTrainer:
     def __init__(self, dataset_folder, voxel_size = 0.2, train_pct = 0.8, data_augmentation_coef = 1.0, feat_keys = ['intensity'], max_instances = 64, channels = [16, 32, 64, 128], latent_dim = 256, batch_size = 1, training = True, semantic_loss_coef = 1.0, instance_loss_coef = 1.0):
-        F.set_kmap_mode("hashmap")
+        print(f'tf32 enabled: {torch.backends.cuda.matmul.allow_tf32}')
 
         self._stats = None
         self._losses = None
@@ -68,7 +73,7 @@ class TreeProjectorTrainer:
         return self._losses
 
     def _load_weights(self):
-        self._model.load_state_dict(torch.load('./weights/tree_unet_weights.pth'))
+        self._model.load_state_dict(torch.load('./weights/tree_projector_weights_x16_0.2.pth'))
 
     @torch.no_grad()
     def _apply_hungarian(self, logits, labels):
@@ -129,7 +134,7 @@ class TreeProjectorTrainer:
     def _compute_loss(self, semantic_output, semantic_labels, instance_output = 0, instance_labels = 0):
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
         loss_inst = self._criterion_instance(instance_output.F, self._apply_hungarian(instance_output, instance_labels.F))
-        # loss_inst = self._criterion_instance(instance_output, instance_labels)
+        # loss_inst = self._criterion_instance_1d(instance_output.F, instance_labels.F)
         # loss_inst = 0
 
         return self._semantic_loss_coef * loss_sem + self._instance_loss_coef * loss_inst
@@ -191,6 +196,7 @@ class TreeProjectorTrainer:
             inputs = feed_dict["inputs"].to(self._device)
             semantic_labels = feed_dict["semantic_labels"].to(self._device)
             instance_labels = feed_dict["instance_labels"].to(self._device)
+            optimizer.zero_grad()
 
             with amp.autocast(enabled=True):
                 semantic_output, instance_output = self._model(inputs)
@@ -206,7 +212,6 @@ class TreeProjectorTrainer:
                 'mIoU': f'{stat["miou"]:.4f}'
             })
 
-            optimizer.zero_grad()
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -260,9 +265,14 @@ class TreeProjectorTrainer:
                 instance_output = torch.argmax(instance_output.F.cpu(), dim=1).numpy()
                 # instance_output = np.zeros(semantic_output.shape)
                 # instance_output = instance_output.F.cpu().reshape(-1, 1).numpy()
-                # print(instance_output)
+                # plt.hist(instance_output, bins=256, edgecolor='black')  # puedes ajustar 'bins' según necesites
+                # plt.title('Histograma del array')
+                # plt.xlabel('Valor')
+                # plt.ylabel('Frecuencia')
+                # plt.grid(True)
+                # plt.show()
                 # instance_output = DBSCAN(eps=1.0, min_samples=10, metric='euclidean').fit(instance_output).labels_
-                # print(instance_output)
+                # print(np.unique(instance_output))
 
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
