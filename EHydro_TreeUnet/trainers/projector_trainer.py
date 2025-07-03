@@ -25,7 +25,25 @@ from ..models import TreeProjector
 
 
 class TreeProjectorTrainer:
-    def __init__(self, dataset_folder, voxel_size = 0.2, train_pct = 0.8, data_augmentation_coef = 1.0, feat_keys = ['intensity'], max_instances = 64, channels = [16, 32, 64, 128], latent_dim = 256, batch_size = 1, training = True, semantic_loss_coef = 1.0, instance_loss_coef = 1.0):
+    def __init__(
+            self,
+            dataset_folder,
+            voxel_size = 0.2,
+            train_pct = 0.8,
+            data_augmentation_coef = 1.0,
+            feat_keys = ['intensity'],
+            max_instances = 64,
+            channels = [16, 32, 64, 128],
+            latent_dim = 256,
+            batch_size = 1,
+            training = True,
+            semantic_loss_coef = 1.0,
+            offset_loss_coef = 1.0,
+            instance_loss_coef = 1.0,
+            cosine_loss_coef = 1.0,
+            weights_file = 'tree_projector_weights.pth'
+        ):
+
         print(f'tf32 enabled: {torch.backends.cuda.matmul.allow_tf32}')
 
         self._stats = None
@@ -50,10 +68,16 @@ class TreeProjectorTrainer:
         self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
 
         self._criterion_semantic = nn.CrossEntropyLoss()
-        self._criterion_instance = nn.CrossEntropyLoss()
+        self._criterion_offset_magnitude = nn.L1Loss()
+        self._criterion_offset_cosine = nn.CosineSimilarity()
+        # self._criterion_instance = nn.CrossEntropyLoss()
 
         self._semantic_loss_coef = semantic_loss_coef
+        self._offset_loss_coef = offset_loss_coef
         self._instance_loss_coef = instance_loss_coef
+        self._cosine_loss_coef = cosine_loss_coef
+
+        self._weights_file = weights_file
 
         if not training:
             self._load_weights()
@@ -73,7 +97,7 @@ class TreeProjectorTrainer:
         return self._losses
 
     def _load_weights(self):
-        self._model.load_state_dict(torch.load('./weights/tree_projector_weights_x16_0.2.pth'))
+        self._model.load_state_dict(torch.load(Path('./weights') / self._weights_file))
 
     @torch.no_grad()
     def _apply_hungarian(self, logits, labels):
@@ -131,13 +155,16 @@ class TreeProjectorTrainer:
         L_reg = torch.abs(mu).mean()
         return alpha * L_var + beta * L_dist + gamma * L_reg
     
-    def _compute_loss(self, semantic_output, semantic_labels, instance_output = 0, instance_labels = 0):
+    def _compute_loss(self, semantic_output, semantic_labels, offset_output = 0, offset_labels = 0):
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
-        loss_inst = self._criterion_instance(instance_output.F, self._apply_hungarian(instance_output, instance_labels.F))
+        loss_offset_magnitude = self._criterion_offset_magnitude(offset_output.F, offset_labels.F)
+        loss_offset_cos = (1.0 - self._criterion_offset_cosine(offset_output.F, offset_labels.F)).mean()
+        loss_offset = loss_offset_magnitude + self._cosine_loss_coef * loss_offset_cos
+        # loss_inst = self._criterion_instance(instance_output.F, self._apply_hungarian(instance_output, instance_labels.F))
         # loss_inst = self._criterion_instance_1d(instance_output.F, instance_labels.F)
         # loss_inst = 0
 
-        return self._semantic_loss_coef * loss_sem + self._instance_loss_coef * loss_inst
+        return self._semantic_loss_coef * loss_sem + self._offset_loss_coef * loss_offset
     
     @torch.no_grad()    
     def _compute_metrics(self, pred_labels, gt_labels, num_classes, ignore_index = None):
@@ -195,14 +222,15 @@ class TreeProjectorTrainer:
         for feed_dict in pbar:
             inputs = feed_dict["inputs"].to(self._device)
             semantic_labels = feed_dict["semantic_labels"].to(self._device)
+            offset_labels = feed_dict["offset_labels"].to(self._device)
             instance_labels = feed_dict["instance_labels"].to(self._device)
             optimizer.zero_grad()
 
             with amp.autocast(enabled=True):
-                semantic_output, instance_output = self._model(inputs)
+                semantic_output, offset_output = self._model(inputs)
                 # semantic_output = self._model(inputs)
                 # loss = self._compute_loss(semantic_output, semantic_labels)
-                loss = self._compute_loss(semantic_output, semantic_labels, instance_output, instance_labels)
+                loss = self._compute_loss(semantic_output, semantic_labels, offset_output, offset_labels)
                 stat = self._compute_metrics(semantic_output.F, semantic_labels.F, num_classes=self._dataset.num_classes)
 
             stats.append(stat)
@@ -242,19 +270,21 @@ class TreeProjectorTrainer:
             pbar = tqdm(self._val_loader, desc='[Inference]')
             for feed_dict in pbar:
                 semantic_labels_cpu = feed_dict["semantic_labels"].F.numpy()
+                offset_labels_cpu = feed_dict["instance_labels"].F.numpy()
                 instance_labels_cpu = feed_dict["instance_labels"].F.numpy()
                 # coords = feed_dict["coords"].numpy()
                 # inverse_map = feed_dict["inverse_map"].numpy()
 
                 inputs = feed_dict["inputs"].to(self._device)
                 semantic_labels = feed_dict["semantic_labels"].to(self._device)
+                offset_labels = feed_dict["offset_labels"].to(self._device)
                 instance_labels = feed_dict["instance_labels"].to(self._device)
 
                 with amp.autocast(enabled=True):
-                    semantic_output, instance_output = self._model(inputs)
+                    semantic_output, offset_output = self._model(inputs)
                     # semantic_output = self._model(inputs)
                     # loss = self._compute_loss(semantic_output, semantic_labels)
-                    loss = self._compute_loss(semantic_output, semantic_labels, instance_output, instance_labels)
+                    loss = self._compute_loss(semantic_output, semantic_labels, offset_output, offset_labels)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, num_classes=self._dataset.num_classes)
 
                 losses.append(loss.item())
@@ -262,7 +292,8 @@ class TreeProjectorTrainer:
 
                 voxels = semantic_output.C.cpu().numpy()
                 semantic_output = torch.argmax(semantic_output.F.cpu(), dim=1).numpy()
-                instance_output = torch.argmax(instance_output.F.cpu(), dim=1).numpy()
+                offset_output = offset_output.F.cpu().numpy()
+                # offset_output = torch.argmax(offset_output.F.cpu(), dim=1).numpy()
                 # instance_output = np.zeros(semantic_output.shape)
                 # instance_output = instance_output.F.cpu().reshape(-1, 1).numpy()
                 # plt.hist(instance_output, bins=256, edgecolor='black')  # puedes ajustar 'bins' según necesites
@@ -279,7 +310,7 @@ class TreeProjectorTrainer:
                     'mIoU': f'{stat["miou"]:.4f}'
                 })
 
-                yield voxels, semantic_output, instance_output, semantic_labels_cpu, instance_labels_cpu #, coords, inverse_map
+                yield voxels, semantic_output, offset_output, semantic_labels_cpu, offset_labels_cpu #, coords, inverse_map
         
         self._stats = stats
         self._losses = losses

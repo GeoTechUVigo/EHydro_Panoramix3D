@@ -47,16 +47,12 @@ class Dataset:
             file = laspy.read(path)
 
             coords = np.vstack((file.x, file.y, file.z)).transpose()
-            intensity = np.array(file.I_norm)[:, None]
-
             coords_min = coords.min(axis=0)
             coords_norm = (coords - coords_min) / (coords.max(axis=0) - coords_min)
 
-            wavelength = np.array(file.wavelength)[:, None]
-
             select_columns = []
             if 'intensity' in self._feat_keys:
-                select_columns.append(intensity)
+                select_columns.append(np.array(file.I_norm)[:, None])
             if 'x_norm' in self._feat_keys:
                 select_columns.append(coords_norm[:, [0]])
             if 'y_norm' in self._feat_keys:
@@ -64,7 +60,7 @@ class Dataset:
             if 'z_norm' in self._feat_keys:
                 select_columns.append(coords_norm[:, [2]])
             if 'wavelength' in self._feat_keys:
-                select_columns.append(wavelength)
+                select_columns.append(np.array(file.wavelength)[:, None])
 
             feats = np.hstack(select_columns)
 
@@ -99,18 +95,35 @@ class Dataset:
 
         coords -= np.min(coords, axis=0, keepdims=True)
 
-        voxels, indices, inverse_map = sparse_quantize(coords, self._voxel_size, return_index=True, return_inverse=True)
+        voxels, indices = sparse_quantize(coords, self._voxel_size, return_index=True)
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
         instance_labels = instance_labels[indices]
+
+        unique_labels, inverse_indices = np.unique(instance_labels, return_inverse=True)
+        n_instances = len(unique_labels)
+
+        sums = np.zeros((n_instances, 3), dtype=np.float64)
+        counts = np.zeros(n_instances, dtype=np.int64)
+
+        np.add.at(sums, inverse_indices, coords)
+        np.add.at(counts, inverse_indices, 1)
+
+        centroids = sums / counts[:, None]
+        centroids_per_point = centroids[inverse_indices]
+
+        offsets = centroids_per_point - coords
+        offsets[(semantic_labels == 0) | (semantic_labels == 1)] = 0
 
         voxels = torch.tensor(voxels, dtype=torch.int)
         feat = torch.tensor(feat.astype(np.float32), dtype=torch.float)
         semantic_labels = torch.tensor(semantic_labels, dtype=torch.long)
         instance_labels = torch.tensor(instance_labels, dtype=torch.long)
+        offset_labels = torch.tensor(offsets, dtype=torch.float)
 
         inputs = SparseTensor(coords=voxels, feats=feat)
         semantic_labels = SparseTensor(coords=voxels, feats=semantic_labels)
         instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
+        offset_labels = SparseTensor(coords=voxels, feats=offset_labels)
 
-        return {"inputs": inputs, "semantic_labels": semantic_labels, "instance_labels": instance_labels}
+        return {"inputs": inputs, "semantic_labels": semantic_labels, "instance_labels": instance_labels, "offset_labels": offset_labels}
