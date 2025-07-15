@@ -158,8 +158,16 @@ class TreeProjectorTrainer:
     def _compute_loss(self, semantic_output, semantic_labels, offset_output = 0, offset_labels = 0):
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
 
-        # semantic_prediction = torch.argmax(semantic_output.F, dim=1)
-        # offset_labels_filtered = offset_labels.F[(semantic_prediction != 0) & (semantic_prediction != 1)]
+        with torch.no_grad():
+            semantic_prediction = torch.argmax(semantic_output.F, dim=1)
+            mask_pred = (semantic_prediction == 0) | (semantic_prediction == 1)
+            mask_gt = (semantic_labels.F == 0) | (semantic_labels.F == 1)
+
+        idx_pred = mask_pred.nonzero(as_tuple=False).squeeze(1)
+        idx_gt = mask_gt.nonzero(as_tuple=False).squeeze(1)
+
+        offset_labels.F[idx_pred] = 0
+        offset_labels.F[idx_gt] = 0
         
         loss_offset_magnitude = self._criterion_offset_magnitude(offset_output.F, offset_labels.F)
         loss_offset_cos = (1.0 - self._criterion_offset_cosine(offset_output.F, offset_labels.F)).mean()

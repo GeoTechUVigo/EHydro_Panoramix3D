@@ -90,7 +90,7 @@ class Dataset:
         centroids = sums / counts[:, None]
         centroids_per_point = centroids[inverse_indices]
 
-        return centroids_per_point # - voxels
+        return centroids_per_point - voxels
     
     def _preprocess(self, idx: int):
         coords, feat, semantic_labels, instance_labels = self._load_file(self._files[idx % len(self._files)])

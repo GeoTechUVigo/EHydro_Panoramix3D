@@ -2,7 +2,7 @@ import torch
 
 from ..modules import VoxelDecoder
 from torch import nn
-from torchsparse import nn as spnn
+from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.resnet import SparseResNet
 
 
@@ -24,16 +24,20 @@ class TreeProjector(nn.Module):
 
     def forward(self, x):
         feats = self.voxel_decoder(self.encoder(x))
-
         semantic_output = self.semantic_head(feats)
         
-        semantic_labels = torch.argmax(semantic_output.F, dim=1)
-        mask = (semantic_labels != 0) & (semantic_labels != 1)
+        with torch.no_grad():
+            semantic_labels = torch.argmax(semantic_output.F, dim=1)
+            mask = (semantic_labels != 0) & (semantic_labels != 1)
 
-        feats.C = feats.C[mask]
-        feats.F = feats.F[mask]
+        idx  = mask.nonzero(as_tuple=False).squeeze(1)
+        sub_feats = SparseTensor(coords=feats.C[idx], feats=feats.F[idx], stride=feats.stride)
 
-        # feats.F = torch.cat([feats.F, feats.C[:, 1:]], dim=1)
-        offset_output = self.offset_head(feats)
+        offset_output = self.offset_head(sub_feats)
+        full_offset_output = torch.zeros(feats.F.size(0), offset_output.F.size(1), device=feats.F.device, dtype=offset_output.F.dtype)
+        full_offset_output.index_copy_(0, idx, offset_output.F)
+
+        offset_output.C = feats.C
+        offset_output.F = full_offset_output
 
         return semantic_output, offset_output
