@@ -157,8 +157,13 @@ class TreeProjectorTrainer:
     
     def _compute_loss(self, semantic_output, semantic_labels, offset_output = 0, offset_labels = 0):
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
+
+        # semantic_prediction = torch.argmax(semantic_output.F, dim=1)
+        # offset_labels_filtered = offset_labels.F[(semantic_prediction != 0) & (semantic_prediction != 1)]
+        
         loss_offset_magnitude = self._criterion_offset_magnitude(offset_output.F, offset_labels.F)
         loss_offset_cos = (1.0 - self._criterion_offset_cosine(offset_output.F, offset_labels.F)).mean()
+
         loss_offset = loss_offset_magnitude + self._cosine_loss_coef * loss_offset_cos
         # loss_inst = self._criterion_instance(instance_output.F, self._apply_hungarian(instance_output, instance_labels.F))
         # loss_inst = self._criterion_instance_1d(instance_output.F, instance_labels.F)
@@ -225,7 +230,7 @@ class TreeProjectorTrainer:
             offset_labels = feed_dict["offset_labels"].to(self._device)
             instance_labels = feed_dict["instance_labels"].to(self._device)
             optimizer.zero_grad()
-
+ 
             with amp.autocast(enabled=True):
                 semantic_output, offset_output = self._model(inputs)
                 # semantic_output = self._model(inputs)
@@ -270,7 +275,7 @@ class TreeProjectorTrainer:
             pbar = tqdm(self._val_loader, desc='[Inference]')
             for feed_dict in pbar:
                 semantic_labels_cpu = feed_dict["semantic_labels"].F.numpy()
-                offset_labels_cpu = feed_dict["instance_labels"].F.numpy()
+                offset_labels_cpu = feed_dict["offset_labels"].F.numpy()
                 instance_labels_cpu = feed_dict["instance_labels"].F.numpy()
                 # coords = feed_dict["coords"].numpy()
                 # inverse_map = feed_dict["inverse_map"].numpy()

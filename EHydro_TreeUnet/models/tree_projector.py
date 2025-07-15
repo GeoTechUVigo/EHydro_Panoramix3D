@@ -1,3 +1,5 @@
+import torch
+
 from ..modules import VoxelDecoder
 from torch import nn
 from torchsparse import nn as spnn
@@ -23,4 +25,15 @@ class TreeProjector(nn.Module):
     def forward(self, x):
         feats = self.voxel_decoder(self.encoder(x))
 
-        return self.semantic_head(feats), self.offset_head(feats)
+        semantic_output = self.semantic_head(feats)
+        
+        semantic_labels = torch.argmax(semantic_output.F, dim=1)
+        mask = (semantic_labels != 0) & (semantic_labels != 1)
+
+        feats.C = feats.C[mask]
+        feats.F = feats.F[mask]
+
+        # feats.F = torch.cat([feats.F, feats.C[:, 1:]], dim=1)
+        offset_output = self.offset_head(feats)
+
+        return semantic_output, offset_output

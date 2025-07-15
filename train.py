@@ -27,7 +27,7 @@ def main():
         batch_size=BATCH_SIZE,
         training=True,
         semantic_loss_coef=SEMANTIC_LOSS_COEF,
-        offset_loss_coef=INSTANCE_LOSS_COEF
+        instance_loss_coef=INSTANCE_LOSS_COEF
     )
 
     tester.train()

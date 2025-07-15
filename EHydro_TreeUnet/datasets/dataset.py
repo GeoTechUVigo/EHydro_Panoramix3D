@@ -46,26 +46,15 @@ class Dataset:
         if ext in ('.las, .laz'):
             file = laspy.read(path)
 
-            coords = np.vstack((file.x, file.y, file.z)).transpose()
-            coords_min = coords.min(axis=0)
-            coords_norm = (coords - coords_min) / (coords.max(axis=0) - coords_min)
-
+            coords = file.xyz
             select_columns = []
             if 'intensity' in self._feat_keys:
-                select_columns.append(np.array(file.I_norm)[:, None])
-            if 'x_norm' in self._feat_keys:
-                select_columns.append(coords_norm[:, [0]])
-            if 'y_norm' in self._feat_keys:
-                select_columns.append(coords_norm[:, [1]])
-            if 'z_norm' in self._feat_keys:
-                select_columns.append(coords_norm[:, [2]])
-            if 'wavelength' in self._feat_keys:
-                select_columns.append(np.array(file.wavelength)[:, None])
+                select_columns.append(np.array(file.norm_intensity)[:, None])
 
             feats = np.hstack(select_columns)
 
-            semantic_labels = np.array(file.classification)
-            instance_labels = np.array(file.treeID)
+            semantic_labels = np.array(file.semantic_pred)
+            instance_labels = np.array(file.instance_pred)
         else:
             raise ValueError(f'Unsopported file extension: {ext}!')
 
@@ -87,7 +76,22 @@ class Dataset:
                                 dtype=coords.dtype)
 
         return (coords @ rotation_mtx.T) * scale
-        
+    
+    def _get_instance_offsets(self, voxels, instance_labels):
+        unique_labels, inverse_indices = np.unique(instance_labels, return_inverse=True)
+        n_instances = len(unique_labels)
+
+        sums = np.zeros((n_instances, 3), dtype=np.float64)
+        counts = np.zeros(n_instances, dtype=np.int64)
+
+        np.add.at(sums, inverse_indices, voxels)
+        np.add.at(counts, inverse_indices, 1)
+
+        centroids = sums / counts[:, None]
+        centroids_per_point = centroids[inverse_indices]
+
+        return centroids_per_point # - voxels
+    
     def _preprocess(self, idx: int):
         coords, feat, semantic_labels, instance_labels = self._load_file(self._files[idx % len(self._files)])
         if idx >= len(self._files):
@@ -99,31 +103,19 @@ class Dataset:
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
         instance_labels = instance_labels[indices]
-
-        unique_labels, inverse_indices = np.unique(instance_labels, return_inverse=True)
-        n_instances = len(unique_labels)
-
-        sums = np.zeros((n_instances, 3), dtype=np.float64)
-        counts = np.zeros(n_instances, dtype=np.int64)
-
-        np.add.at(sums, inverse_indices, coords)
-        np.add.at(counts, inverse_indices, 1)
-
-        centroids = sums / counts[:, None]
-        centroids_per_point = centroids[inverse_indices]
-
-        offsets = centroids_per_point - coords
-        offsets[(semantic_labels == 0) | (semantic_labels == 1)] = 0
+        offsets = self._get_instance_offsets(voxels, instance_labels)
 
         voxels = torch.tensor(voxels, dtype=torch.int)
         feat = torch.tensor(feat.astype(np.float32), dtype=torch.float)
+
         semantic_labels = torch.tensor(semantic_labels, dtype=torch.long)
-        instance_labels = torch.tensor(instance_labels, dtype=torch.long)
         offset_labels = torch.tensor(offsets, dtype=torch.float)
+        instance_labels = torch.tensor(instance_labels, dtype=torch.long)
 
         inputs = SparseTensor(coords=voxels, feats=feat)
+        
         semantic_labels = SparseTensor(coords=voxels, feats=semantic_labels)
-        instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
         offset_labels = SparseTensor(coords=voxels, feats=offset_labels)
+        instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
 
-        return {"inputs": inputs, "semantic_labels": semantic_labels, "instance_labels": instance_labels, "offset_labels": offset_labels}
+        return {"inputs": inputs, "semantic_labels": semantic_labels, "offset_labels": offset_labels, "instance_labels": instance_labels}
