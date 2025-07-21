@@ -2,7 +2,7 @@ import torch
 
 from torch import nn, cat
 from torchsparse import nn as spnn
-from torchsparse.backbones.modules import SparseConvBlock, SparseConvTransposeBlock
+from torchsparse.backbones.modules import SparseConvBlock
 
 
 class VoxelDecoder(nn.Module):
