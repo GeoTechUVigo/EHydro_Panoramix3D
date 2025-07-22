@@ -38,9 +38,9 @@ class TreeProjectorTrainer:
             batch_size = 1,
             training = True,
             semantic_loss_coef = 1.0,
-            offset_loss_coef = 1.0,
+            dir_loss_coef = 1.0,
+            mag_loss_coef = 1.0,
             instance_loss_coef = 1.0,
-            cosine_loss_coef = 1.0,
             weights_file = 'tree_projector_weights.pth'
         ):
 
@@ -68,14 +68,13 @@ class TreeProjectorTrainer:
         self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
 
         self._criterion_semantic = nn.CrossEntropyLoss()
-        self._criterion_instance = nn.CrossEntropyLoss()
-        self._criterion_offset_magnitude = nn.L1Loss()
-        self._criterion_offset_cosine = nn.CosineSimilarity()
+        self._criterion_offset_dir = nn.CosineSimilarity()
+        self._criterion_offset_mag = nn.SmoothL1Loss()
 
         self._semantic_loss_coef = semantic_loss_coef
-        self._offset_loss_coef = offset_loss_coef
+        self._dir_loss_coef = dir_loss_coef
+        self._mag_loss_coef = mag_loss_coef
         self._instance_loss_coef = instance_loss_coef
-        self._cosine_loss_coef = cosine_loss_coef
 
         self._weights_file = weights_file
 
@@ -128,35 +127,15 @@ class TreeProjectorTrainer:
                 remapped[mask & (labels == uniq[r])] = c
 
         return remapped
-    
-    def _criterion_instance_1d(self, instance_output, instance_labels, delta_v=0.1, delta_d=2.0, alpha=1.0, beta=1.0, gamma=1e-3):
-        device = instance_output.device
-        uniq = instance_labels.unique()
-        if len(uniq) == 0:
-            return instance_output.new_tensor(0.)
 
-        mu = []
-        L_var = instance_output.new_tensor(0.)
-        for k in uniq:
-            mask = instance_labels == k
-            e_k  = instance_output[mask]
-            mu_k = e_k.mean()
-            mu.append(mu_k)
-            L_var += ((torch.relu(torch.abs(e_k - mu_k) - delta_v)) ** 2).mean()
-        L_var /= len(uniq)
-
-        mu = torch.stack(mu)
-        if len(mu) > 1:
-            pdist = torch.abs(mu.unsqueeze(0) - mu.unsqueeze(1))
-            L_dist = (torch.relu(delta_d - pdist - torch.eye(len(mu), device=device) * 1e5) ** 2).sum() / (len(mu)*(len(mu)-1))
-        else:
-            L_dist = instance_output.new_tensor(0.)
-
-        L_reg = torch.abs(mu).mean()
-        return alpha * L_var + beta * L_dist + gamma * L_reg
-    
-    def _compute_loss(self, semantic_output, semantic_labels, instance_output = 0, instance_labels = 0, offset_output = 0, offset_labels = 0):
+    def _compute_loss(self, semantic_output, semantic_labels, offset_dir_output, offset_dir_labels, offset_mag_output, offset_mag_labels):
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
+        loss_dir = (1.0 - self._criterion_offset_dir(offset_dir_output.F, offset_dir_labels.F)).mean()
+        loss_mag = self._criterion_offset_mag(offset_mag_output.F, offset_mag_labels.F)
+
+        return self._semantic_loss_coef * loss_sem + self._dir_loss_coef * loss_dir + self._mag_loss_coef * loss_mag
+        
+        '''
         loss_inst = self._criterion_instance(instance_output.F, self._apply_hungarian(instance_output, instance_labels.F))
 
         with torch.no_grad():
@@ -176,6 +155,7 @@ class TreeProjectorTrainer:
         loss_offset = loss_offset_magnitude + self._cosine_loss_coef * loss_offset_cos
 
         return self._semantic_loss_coef * loss_sem + self._offset_loss_coef * loss_offset + self._instance_loss_coef * loss_inst
+        '''
     
     def _mask_iou(mask_pred: torch.Tensor, mask_gt: torch.Tensor) -> float:
         mask_pred = mask_pred.bool()
@@ -316,15 +296,13 @@ class TreeProjectorTrainer:
         for feed_dict in pbar:
             inputs = feed_dict["inputs"].to(self._device)
             semantic_labels = feed_dict["semantic_labels"].to(self._device)
-            offset_labels = feed_dict["offset_labels"].to(self._device)
-            instance_labels = feed_dict["instance_labels"].to(self._device)
+            offset_dir_labels = feed_dict["offset_dir_labels"].to(self._device)
+            offset_mag_labels = feed_dict["offset_mag_labels"].to(self._device)
             optimizer.zero_grad()
  
             with amp.autocast(enabled=True):
-                semantic_output, instance_output, offset_output = self._model(inputs)
-                # semantic_output = self._model(inputs)
-                # loss = self._compute_loss(semantic_output, semantic_labels)
-                loss = self._compute_loss(semantic_output, semantic_labels, instance_output, instance_labels, offset_output, offset_labels)
+                semantic_output, offset_dir_output, offset_mag_output = self._model(inputs)
+                loss = self._compute_loss(semantic_output, semantic_labels, offset_dir_output, offset_dir_labels, offset_mag_output, offset_mag_labels)
                 stat = self._compute_metrics(semantic_output.F, semantic_labels.F)
 
             stats.append(stat)
@@ -364,21 +342,17 @@ class TreeProjectorTrainer:
             pbar = tqdm(self._val_loader, desc='[Inference]')
             for feed_dict in pbar:
                 semantic_labels_cpu = feed_dict["semantic_labels"].F.numpy()
-                offset_labels_cpu = feed_dict["offset_labels"].F.numpy()
-                instance_labels_cpu = feed_dict["instance_labels"].F.numpy()
-                # coords = feed_dict["coords"].numpy()
-                # inverse_map = feed_dict["inverse_map"].numpy()
+                offset_dir_labels_cpu = feed_dict["offset_dir_labels"].F.numpy()
+                offset_mag_labels_cpu = feed_dict["offset_mag_labels"].F.numpy()
 
                 inputs = feed_dict["inputs"].to(self._device)
                 semantic_labels = feed_dict["semantic_labels"].to(self._device)
-                offset_labels = feed_dict["offset_labels"].to(self._device)
-                instance_labels = feed_dict["instance_labels"].to(self._device)
-
+                offset_dir_labels = feed_dict["offset_dir_labels"].to(self._device)
+                offset_mag_labels = feed_dict["offset_mag_labels"].to(self._device)
+    
                 with amp.autocast(enabled=True):
-                    semantic_output, instance_output, offset_output = self._model(inputs)
-                    # semantic_output = self._model(inputs)
-                    # loss = self._compute_loss(semantic_output, semantic_labels)
-                    loss = self._compute_loss(semantic_output, semantic_labels, instance_output, instance_labels, offset_output, offset_labels)
+                    semantic_output, offset_dir_output, offset_mag_output = self._model(inputs)
+                    loss = self._compute_loss(semantic_output, semantic_labels, offset_dir_output, offset_dir_labels, offset_mag_output, offset_mag_labels)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F)
 
                 losses.append(loss.item())
@@ -386,26 +360,15 @@ class TreeProjectorTrainer:
 
                 voxels = semantic_output.C.cpu().numpy()
                 semantic_output = torch.argmax(semantic_output.F.cpu(), dim=1).numpy()
-                instance_output = torch.argmax(instance_output.F.cpu(), dim=1).numpy()
-                offset_output = offset_output.F.cpu().numpy()
-                # offset_output = torch.argmax(offset_output.F.cpu(), dim=1).numpy()
-                # instance_output = np.zeros(semantic_output.shape)
-                # instance_output = instance_output.F.cpu().reshape(-1, 1).numpy()
-                # plt.hist(instance_output, bins=256, edgecolor='black')  # puedes ajustar 'bins' según necesites
-                # plt.title('Histograma del array')
-                # plt.xlabel('Valor')
-                # plt.ylabel('Frecuencia')
-                # plt.grid(True)
-                # plt.show()
-                # instance_output = DBSCAN(eps=1.0, min_samples=10, metric='euclidean').fit(instance_output).labels_
-                # print(np.unique(instance_output))
+                offset_dir_output = offset_dir_output.F.cpu().numpy()
+                offset_mag_output = offset_mag_output.F.cpu().numpy()
 
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
                     'mIoU': f'{stat["miou"]:.4f}'
                 })
 
-                yield voxels, semantic_output, instance_output, offset_output, semantic_labels_cpu, instance_labels_cpu, offset_labels_cpu #, coords, inverse_map
+                yield voxels, semantic_output, offset_dir_output, offset_mag_output, semantic_labels_cpu, offset_dir_labels_cpu, offset_mag_labels_cpu
         
         self._stats = stats
         self._losses = losses
