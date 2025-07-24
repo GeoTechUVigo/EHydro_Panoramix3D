@@ -178,3 +178,5 @@ cython_debug/
 *.pth
 *.npy
 *.pkl
+
+# Open3D junk
