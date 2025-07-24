@@ -103,6 +103,23 @@ class Dataset:
 
         return dir, np.log1p(mag)
     
+    def _get_heat_map(self, voxels, instance_labels, sigma=1.5):
+        heat_map = np.zeros((len(voxels), 1), dtype=np.float32)
+
+        for instance_id in np.unique(instance_labels):
+            if instance_id == 0:
+                continue
+
+            idx = np.where(instance_labels == instance_id)[0]
+            pts = voxels[idx]
+            ctr   = pts.mean(axis=0)
+            d2    = np.sum((pts - ctr)**2, axis=1)
+            s2    = (sigma**2 if np.isscalar(sigma) else sigma[instance_id]**2)
+            mask  = d2 < (3*sigma)**2
+            heat_map[idx[mask]] = np.exp(-d2[mask] / (2*s2))
+
+        return heat_map
+    
     def _preprocess(self, idx: int):
         coords, feat, semantic_labels, instance_labels = self._load_file(self._files[idx % len(self._files)])
         if idx >= len(self._files):
@@ -113,21 +130,33 @@ class Dataset:
         voxels, indices = sparse_quantize(coords, self._voxel_size, return_index=True)
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
+        offset_dir_labels, offset_mag_labels = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
+        heat_map_labels = self._get_heat_map(voxels, instance_labels)
         instance_labels = instance_labels[indices]
-        offset_dir, offset_mag = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
 
         voxels = torch.tensor(voxels, dtype=torch.int)
         feat = torch.tensor(feat.astype(np.float32), dtype=torch.float)
 
         semantic_labels = torch.tensor(semantic_labels, dtype=torch.long)
-        offset_dir_labels = torch.tensor(offset_dir, dtype=torch.float)
-        offset_mag_labels = torch.tensor(offset_mag, dtype=torch.float)
+        offset_dir_labels = torch.tensor(offset_dir_labels, dtype=torch.float)
+        offset_mag_labels = torch.tensor(offset_mag_labels, dtype=torch.float)
+        heat_map_labels = torch.tensor(heat_map_labels, dtype=torch.float)
+        instance_labels = torch.Tensor(instance_labels, dtype=torch.long)
 
         inputs = SparseTensor(coords=voxels, feats=feat)
         
         semantic_labels = SparseTensor(coords=voxels, feats=semantic_labels)
         offset_dir_labels = SparseTensor(coords=voxels, feats=offset_dir_labels)
         offset_mag_labels = SparseTensor(coords=voxels, feats=offset_mag_labels)
+        heat_map_labels = SparseTensor(coords=voxels, feats=heat_map_labels)
+        instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
 
-        return {"inputs": inputs, "semantic_labels": semantic_labels, "offset_dir_labels": offset_dir_labels, "offset_mag_labels": offset_mag_labels}
+        return {
+            "inputs": inputs,
+            "semantic_labels": semantic_labels,
+            "offset_dir_labels": offset_dir_labels,
+            "offset_mag_labels": offset_mag_labels,
+            "heat_map_labels": heat_map_labels,
+            "instance_labels": instance_labels
+        }
     

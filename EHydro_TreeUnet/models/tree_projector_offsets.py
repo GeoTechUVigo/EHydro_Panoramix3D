@@ -1,13 +1,13 @@
 import torch
 
-from ..modules import VoxelDecoder, DirHead, MagHead, InstanceHead, CentroidHead
+from ..modules import VoxelDecoder, DirHead, MagHead, InstanceHead
 from torch import nn
 from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.resnet import SparseResNet
 
 
 class TreeProjector(nn.Module):
-    def __init__(self, in_channels, num_classes, channels = [16, 32, 64, 128], descriptor_dim = 16, instance_density = 0.01, latent_dim = 512):
+    def __init__(self, in_channels, num_classes, descriptor_dim, channels = [16, 32, 64, 128], latent_dim = 512):
         super().__init__()
         blocks = [(3, channels[0], 3, 1)]
         for channel in channels[1:]:
@@ -20,7 +20,8 @@ class TreeProjector(nn.Module):
 
         self.voxel_decoder = VoxelDecoder(channels, latent_dim)
         self.semantic_head = spnn.Conv3d(latent_dim, num_classes, 1, bias=True)
-        self.centroid_head = CentroidHead(latent_dim, instance_density)
+        self.offset_dir_head = DirHead(latent_dim)
+        self.offset_mag_head = MagHead(latent_dim)
         self.instance_head = InstanceHead(latent_dim, descriptor_dim)
 
     def _filter_by_class(self, feats, semantic_output, ignore_cls):
@@ -46,10 +47,34 @@ class TreeProjector(nn.Module):
         semantic_output = self.semantic_head(feats)
         
         # sub_feats, idx = self._filter_by_class(feats, semantic_output, [0])
-        centroid_output = self.centroid_head(feats)
-        instance_output = self.instance_head(feats, centroid_output)
+
+        offset_dir_output = self.offset_dir_head(feats)
+        offset_mag_output = self.offset_mag_head(feats)
+
+        votes = feats.C + (offset_dir_output.F * torch.expm1(offset_mag_output.F))
+        min_corner = torch.floor(votes.min(axis=0)).to(torch.int)
+        grid_coords = votes - min_corner
+        grid_idx = torch.round(grid_coords).to(torch.int)
+
+        shape = grid_idx.max(axis=0) + 1
+        accum = torch.zeros(shape, dtype=torch.float32)
+
+        for v in grid_idx:
+            accum[tuple(v)] += 1.0
+
+        sigma = 1.0
+        thr_frac = 0.1
+
+        accum = gaussian_filter(accum, sigma=sigma, mode="constant")
+        neigh = maximum_filter(accum, size=3, mode="constant")
+        peaks = (accum == neigh) & (accum > thr_frac * accum.max())
+
+        centers = torch.argwhere(peaks) + min_corner  # (K,3) en voxeles originales
+
+        instance_output = self.instance_head(feats, centroids)
 
         # offset_dir_output = self._restore_dimensionality(feats, offset_dir_output, idx)
         # offset_mag_output = self._restore_dimensionality(feats, offset_mag_output, idx)
 
-        return semantic_output, centroid_output, instance_output
+        return semantic_output, offset_dir_output, offset_mag_output
+    
