@@ -180,3 +180,8 @@ cython_debug/
 *.pkl
 
 # Open3D junk
+DepthCapture*.png
+ScreenCapture*.png
+ScreenCamera*.json
+DepthCamera*.json
+RenderOption*.json
