@@ -9,7 +9,7 @@ from torchsparse.utils.quantize import sparse_quantize
 
 
 class Dataset:
-    def __init__(self, files, voxel_size: float, data_augmentation: float = 1.0, yaw_range = (0, 360), tilt_range = (-5, 5), scale = (0.9, 1.1), feat_keys=['intensity', 'x_norm', 'y_norm', 'z_norm', 'wavelength']) -> None:
+    def __init__(self, files, voxel_size: float, data_augmentation: float = 1.0, yaw_range = (0, 360), tilt_range = (-5, 5), scale = (0.8, 1.2), feat_keys=['intensity']) -> None:
         self._rng = np.random.default_rng()
         self._files = files
         self._feat_keys = feat_keys
@@ -66,6 +66,11 @@ class Dataset:
         roll = np.deg2rad(self._rng.uniform(*self._tilt_range))
         scale = self._rng.uniform(*self._scale)
 
+        if self._rng.random() > 0.5:
+            coords[:, 0] *= -1
+        if self._rng.random() > 0.5:
+            coords[:, 1] *= -1
+
         cy, sy = np.cos(yaw), np.sin(yaw)
         cp, sp = np.cos(pitch), np.sin(pitch)
         cr, sr = np.cos(roll), np.sin(roll)
@@ -103,7 +108,7 @@ class Dataset:
 
         return dir, np.log1p(mag)
     
-    def _get_heat_map(self, voxels, instance_labels, sigma=1.5):
+    def _get_centroid_scores(self, voxels, instance_labels, sigma=1.0):
         heat_map = np.zeros((len(voxels), 1), dtype=np.float32)
 
         for instance_id in np.unique(instance_labels):
@@ -112,11 +117,11 @@ class Dataset:
 
             idx = np.where(instance_labels == instance_id)[0]
             pts = voxels[idx]
-            ctr   = pts.mean(axis=0)
-            d2    = np.sum((pts - ctr)**2, axis=1)
-            s2    = (sigma**2 if np.isscalar(sigma) else sigma[instance_id]**2)
-            mask  = d2 < (3*sigma)**2
-            heat_map[idx[mask]] = np.exp(-d2[mask] / (2*s2))
+            ctr = np.round(pts.mean(axis=0)).astype(int)
+            d2 = np.sum((pts - ctr) ** 2, axis=1)
+
+            mask = d2 < (3 * sigma) ** 2
+            heat_map[idx[mask], 0] = np.exp(-d2[mask] / (2 * (sigma ** 2)))
 
         return heat_map
     
@@ -130,33 +135,33 @@ class Dataset:
         voxels, indices = sparse_quantize(coords, self._voxel_size, return_index=True)
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
-        offset_dir_labels, offset_mag_labels = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
-        heat_map_labels = self._get_heat_map(voxels, instance_labels)
         instance_labels = instance_labels[indices]
+        # offset_dir_labels, offset_mag_labels = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
+        centroid_score_labels = self._get_centroid_scores(voxels, instance_labels)
 
         voxels = torch.tensor(voxels, dtype=torch.int)
         feat = torch.tensor(feat.astype(np.float32), dtype=torch.float)
 
         semantic_labels = torch.tensor(semantic_labels, dtype=torch.long)
-        offset_dir_labels = torch.tensor(offset_dir_labels, dtype=torch.float)
-        offset_mag_labels = torch.tensor(offset_mag_labels, dtype=torch.float)
-        heat_map_labels = torch.tensor(heat_map_labels, dtype=torch.float)
-        instance_labels = torch.Tensor(instance_labels, dtype=torch.long)
+        # offset_dir_labels = torch.tensor(offset_dir_labels, dtype=torch.float)
+        # offset_mag_labels = torch.tensor(offset_mag_labels, dtype=torch.float)
+        centroid_score_labels = torch.tensor(centroid_score_labels, dtype=torch.float)
+        instance_labels = torch.tensor(instance_labels, dtype=torch.long)
 
         inputs = SparseTensor(coords=voxels, feats=feat)
         
         semantic_labels = SparseTensor(coords=voxels, feats=semantic_labels)
-        offset_dir_labels = SparseTensor(coords=voxels, feats=offset_dir_labels)
-        offset_mag_labels = SparseTensor(coords=voxels, feats=offset_mag_labels)
-        heat_map_labels = SparseTensor(coords=voxels, feats=heat_map_labels)
+        # offset_dir_labels = SparseTensor(coords=voxels, feats=offset_dir_labels)
+        # offset_mag_labels = SparseTensor(coords=voxels, feats=offset_mag_labels)
+        centroid_score_labels = SparseTensor(coords=voxels, feats=centroid_score_labels)
         instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
 
         return {
             "inputs": inputs,
             "semantic_labels": semantic_labels,
-            "offset_dir_labels": offset_dir_labels,
-            "offset_mag_labels": offset_mag_labels,
-            "heat_map_labels": heat_map_labels,
+            # "offset_dir_labels": offset_dir_labels,
+            # "offset_mag_labels": offset_mag_labels,
+            "centroid_score_labels": centroid_score_labels,
             "instance_labels": instance_labels
         }
     

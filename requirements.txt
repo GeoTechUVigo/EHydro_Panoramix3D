@@ -1,0 +1,9 @@
+torch-scatter==2.0.8 -f https://data.pyg.org/whl/torch-1.9.0+cu111.html
+torch-cluster==1.5.9 -f https://data.pyg.org/whl/torch-1.9.0+cu111.html
+laspy
+plyfile
+open3d
+scipy
+matplotlib
+pandas
+tqdm

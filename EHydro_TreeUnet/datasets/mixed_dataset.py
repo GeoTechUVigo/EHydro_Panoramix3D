@@ -5,7 +5,17 @@ from pathlib import Path
 
 
 class MixedDataset:
-    def __init__(self, folder, voxel_size: float = 0.2, train_pct: float = 0.8, data_augmentation: float = 1.0, yaw_range = (0, 360), tilt_range = (-5, 5), scale = (0.9, 1.1), feat_keys=['intensity', 'x_norm', 'y_norm', 'z_norm', 'wavelength']) -> None:
+    def __init__(
+            self,
+            folder,
+            voxel_size: float = 0.2,
+            train_pct: float = 0.8,
+            data_augmentation: float = 1.0,
+            yaw_range = (0, 360),
+            tilt_range = (-5, 5),
+            scale = (0.9, 1.1),
+            feat_keys=['intensity']
+        ) -> None:
         self._folder = Path(folder)
         self._extensions = ('.laz', '.las')
 
