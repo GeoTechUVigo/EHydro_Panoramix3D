@@ -82,8 +82,8 @@ class TreeProjectorTrainer:
         print(f"Parámetros totales: {total_params:,}")
         print(f"Parámetros entrenables: {trainable_params:,}")
 
-        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
-        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
+        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=8, pin_memory=True)
+        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=8, pin_memory=True)
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
@@ -313,7 +313,7 @@ class TreeProjectorTrainer:
                 instance_labels = feed_dict["instance_labels"].to(self._device)
                 optimizer.zero_grad()
     
-                with amp.autocast(enabled=True):
+                with amp.autocast(enabled=False):
                     semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
                     loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap, epoch)
