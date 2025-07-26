@@ -56,8 +56,15 @@ class CentroidHead(nn.Module):
             return SparseTensor(coords=empty_coords, feats=voxel_feats.F.new_empty(0, voxel_feats.F.size(1))), SparseTensor(coords=empty_coords, feats=voxel_feats.F.new_empty(0, 1))
 
         peak_idx = torch.nonzero(peak_mask).squeeze(1)
-        scores = scores[peak_idx][:, None]
         peak_coords = coords[peak_idx]
+        peak_scores = scores[peak_idx]
+        
+        if peak_scores.size(0) > 256:
+            topk_scores, topk_indices = torch.topk(peak_scores, k=256, dim=0)
+            peak_idx = peak_idx[topk_indices.squeeze()]
+            scores = topk_scores[:, None]
+        else:
+            scores = peak_scores[:, None]
 
         owner = torch.full((coords.size(0),), -1, device=coords.device, dtype=torch.long)
         owner[peak_idx] = torch.arange(peak_idx.size(0), device=coords.device)
