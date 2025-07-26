@@ -38,8 +38,7 @@ class TreeProjector(nn.Module):
         feats = self.voxel_decoder(self.encoder(x))
         semantic_output = self.semantic_head(feats)
         
-        feats_pond = SparseTensor(coords=feats.C, feats=feats.F * (1.0 - semantic_output.F.softmax(dim=-1)[:, 0:1]))
-        centroid_score_output, centroid_feats_output, centroid_confidence_output = self.centroid_head(feats_pond)
+        centroid_score_output, centroid_feats_output, centroid_confidence_output = self.centroid_head(feats, semantic_output)
         instance_output = self.instance_head(feats, centroid_feats_output, centroid_confidence_output)
 
         return semantic_output, centroid_score_output, centroid_confidence_output, instance_output

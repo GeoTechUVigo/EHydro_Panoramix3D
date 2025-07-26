@@ -32,9 +32,9 @@ class VoxelDecoder(nn.Module):
             self.smooth.append(SparseConvBlock(out_channels, out_channels, kernel_size=3))
 
         self.mixer = nn.Sequential(
-            SparseConvBlock(sum(channels) + 3, latent_dim, kernel_size=3),
-            SparseConvBlock(latent_dim, latent_dim, kernel_size=3),
-            SparseConvBlock(latent_dim, latent_dim, kernel_size=1)
+            SparseConvBlock(sum(channels), latent_dim - 3, kernel_size=3),
+            SparseConvBlock(latent_dim - 3, latent_dim - 3, kernel_size=3),
+            SparseConvBlock(latent_dim - 3, latent_dim - 3, kernel_size=1)
         )
     
     def forward(self, x):
@@ -43,8 +43,9 @@ class VoxelDecoder(nn.Module):
             x[-1].F = cat([x[-1].F, x[i].F], dim=1)
             x[-1] = self.smooth[i](x[-1])
 
-        x[-1].F = cat([x[-1].F, x[-1].C[:, 1:]], dim=1)
-        return self.mixer(x[-1])
+        mix = self.mixer(x[-1])
+        mix.F = cat([mix.F, mix.C[:, 1:]], dim=1)
+        return mix
     
     def _init_trilinear3d(self, conv):
         K = conv.kernel_size[0]

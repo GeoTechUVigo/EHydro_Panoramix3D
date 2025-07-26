@@ -76,9 +76,10 @@ class CentroidHead(nn.Module):
 
         return SparseTensor(coords=peak_coords, feats=feat_mean), SparseTensor(coords=peak_coords, feats=scores)
 
-    def forward(self, x):
-        centroid_score = self.conv(x)
+    def forward(self, feats, semantic_output):
+        centroid_score = self.conv(feats)
         centroid_score.F = self.act(centroid_score.F)
-        centroid_feat, centroid_confidence = self._find_centroid_peaks(x, centroid_score)
+        centroid_score.F = centroid_score.F * (1.0 - semantic_output.F.softmax(dim=-1)[:, 0:1])
+        centroid_feat, centroid_confidence = self._find_centroid_peaks(feats, centroid_score)
 
         return centroid_score, centroid_feat, centroid_confidence

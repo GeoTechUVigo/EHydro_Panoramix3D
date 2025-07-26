@@ -153,18 +153,18 @@ class TreeProjectorTrainer:
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F)
 
-        N, K = instance_output.F.shape
-        targets = torch.zeros((N, K), dtype=torch.float32, device=instance_output.F.device)
-        targets[torch.arange(N), instance_labels] = 1.0
-
-        prob = torch.sigmoid(instance_output.F)
-        loss_bce = self._criterion_bce(instance_output.F, targets)
-        loss_dice = (1 - (2 * ( prob * targets).sum(0) + 1e-4) / (prob.sum(0) + targets.sum(0) + 1e-4)).mean()
-        
-        loss_inst = loss_bce + loss_dice
-
         if epoch == 1:
-            loss_inst *= 0.5
+            loss_inst = 0.0
+        else:
+            N, K = instance_output.F.shape
+            targets = torch.zeros((N, K), dtype=torch.float32, device=instance_output.F.device)
+            targets[torch.arange(N), instance_labels] = 1.0
+
+            prob = torch.sigmoid(instance_output.F)
+            loss_bce = self._criterion_bce(instance_output.F, targets)
+            loss_dice = (1 - (2 * ( prob * targets).sum(0) + 1e-4) / (prob.sum(0) + targets.sum(0) + 1e-4)).mean()
+            
+            loss_inst = loss_bce + loss_dice
 
         return self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
 
@@ -268,7 +268,6 @@ class TreeProjectorTrainer:
             "precision_micro":       microP.cpu().numpy(),
             "recall_micro":          microR.cpu().numpy(),
             "f1_micro":              microF.cpu().numpy(),
-            "ap_per_class":          ap_per_class.cpu().numpy(),
             "map":                   map_val.cpu().numpy(),
         }
 
@@ -302,8 +301,8 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'\n=== Starting epoch {epoch} ===')
             if epoch == 1:
-                print('Starting to learn instance correlation at 50% rate.\n')
-            elif epoch == 2:
+                print('Not learning instance correlation by now.\n')
+            if epoch == 2:
                 print('Learning instance correlation at 100% rate.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]')
@@ -386,9 +385,9 @@ class TreeProjectorTrainer:
     
                 with amp.autocast(enabled=True):
                     semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
-                    instance_labels.F = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels, 0)
-                    stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels.F)
+                    instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
+                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap, 0)
+                    stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
 
                 losses.append(loss.item())
                 stats.append(stat)
@@ -404,7 +403,7 @@ class TreeProjectorTrainer:
                     'loss': f'{loss.item():.4f}',
                     'mIoU': f'{stat["miou"]:.4f}',
                     'mAP': f'{stat["map"]:.4f}',
-                    'centroids found': f'{centroid_confidence_output.F.size(0)} ({len(np.unique(instance_output))}) / {len(np.unique(instance_labels_cpu))}'
+                    'centroids found': f'{centroid_confidence_output.shape[0]} ({len(np.unique(instance_output))}) / {len(np.unique(instance_labels_cpu))}'
                 })
 
                 yield voxels, semantic_output, semantic_labels_cpu, centroid_score_output, centroid_score_labels_cpu, instance_output, instance_labels_cpu, centroid_voxels, centroid_confidence_output
