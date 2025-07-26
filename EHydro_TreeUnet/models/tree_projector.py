@@ -31,15 +31,19 @@ class TreeProjector(nn.Module):
 
         self.voxel_decoder = VoxelDecoder(channels, latent_dim)
         self.semantic_head = spnn.Conv3d(latent_dim, num_classes, 1, bias=True)
-        self.centroid_head = CentroidHead(latent_dim, instance_density=instance_density, tau=centroid_thres, peak_radius=peak_radius, min_score_for_center=min_score_for_center)
-        self.instance_head = InstanceHead(latent_dim, descriptor_dim)
+        self.centroid_head = CentroidHead(latent_dim, instance_density=instance_density)
+        self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres, peak_radius=peak_radius, min_score_for_center=min_score_for_center)
 
-    def forward(self, x):
+    def forward(self, x, centroid_score_labels = None):
         feats = self.voxel_decoder(self.encoder(x))
         semantic_output = self.semantic_head(feats)
         
-        centroid_score_output, centroid_feats_output, centroid_confidence_output = self.centroid_head(feats, semantic_output)
-        instance_output = self.instance_head(feats, centroid_feats_output, centroid_confidence_output)
+        centroid_score_output = self.centroid_head(feats, semantic_output)
+
+        if centroid_score_labels is None:
+            centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_output)
+        else:
+            centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_labels)
 
         return semantic_output, centroid_score_output, centroid_confidence_output, instance_output
     

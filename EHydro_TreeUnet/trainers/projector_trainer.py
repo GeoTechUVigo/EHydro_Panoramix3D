@@ -83,7 +83,7 @@ class TreeProjectorTrainer:
         print(f"Parámetros entrenables: {trainable_params:,}")
 
         self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=8, pin_memory=True)
-        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=8, pin_memory=True)
+        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
@@ -149,22 +149,19 @@ class TreeProjectorTrainer:
 
         return remapped
 
-    def _compute_loss(self, semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels, epoch):
+    def _compute_loss(self, semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels):
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F)
 
-        if epoch == 1:
-            loss_inst = 0.0
-        else:
-            N, K = instance_output.F.shape
-            targets = torch.zeros((N, K), dtype=torch.float32, device=instance_output.F.device)
-            targets[torch.arange(N), instance_labels] = 1.0
+        N, K = instance_output.F.shape
+        targets = torch.zeros((N, K), dtype=torch.float32, device=instance_output.F.device)
+        targets[torch.arange(N), instance_labels] = 1.0
 
-            prob = torch.sigmoid(instance_output.F)
-            loss_bce = self._criterion_bce(instance_output.F, targets)
-            loss_dice = (1 - (2 * ( prob * targets).sum(0) + 1e-4) / (prob.sum(0) + targets.sum(0) + 1e-4)).mean()
-            
-            loss_inst = loss_bce + loss_dice
+        prob = torch.sigmoid(instance_output.F)
+        loss_bce = self._criterion_bce(instance_output.F, targets)
+        loss_dice = (1 - (2 * ( prob * targets).sum(0) + 1e-4) / (prob.sum(0) + targets.sum(0) + 1e-4)).mean()
+        
+        loss_inst = loss_bce + loss_dice
 
         return self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
 
@@ -301,9 +298,9 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'\n=== Starting epoch {epoch} ===')
             if epoch == 1:
-                print('Not learning instance correlation by now.\n')
-            if epoch == 2:
-                print('Learning instance correlation at 100% rate.\n')
+                print('Training instance correlation with labels instead of predictions by now...\n')
+            if epoch == 3:
+                print('Training instance correlation with predictions.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]')
             for feed_dict in pbar:
@@ -313,10 +310,13 @@ class TreeProjectorTrainer:
                 instance_labels = feed_dict["instance_labels"].to(self._device)
                 optimizer.zero_grad()
     
-                with amp.autocast(enabled=False):
-                    semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
+                with amp.autocast(enabled=True):
+                    if epoch == 1:
+                        semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs, centroid_score_labels)
+                    else:
+                        semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap, epoch)
+                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
 
                 with torch.no_grad():
@@ -383,10 +383,10 @@ class TreeProjectorTrainer:
                 centroid_score_labels = feed_dict["centroid_score_labels"].to(self._device)
                 instance_labels = feed_dict["instance_labels"].to(self._device)
     
-                with amp.autocast(enabled=False):
+                with amp.autocast(enabled=True):
                     semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap, 0)
+                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
 
                 losses.append(loss.item())
