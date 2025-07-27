@@ -9,16 +9,17 @@ from .dataset import Dataset
 class MixedDataset:
     def __init__(
             self,
-            folder: str,
+            folder: Path,
             voxel_size: float = 0.2,
+            feat_keys: List[str] = ['intensity'],
+            centroid_sigma: float = 1.0,
             train_pct: float = 0.8,
             data_augmentation: float = 1.0,
             yaw_range: Tuple[float, float] = (0.0, 360.0),
             tilt_range: Tuple[float, float] = (-5.0, 5.0),
-            scale: Tuple[float, float] = (0.9, 1.1),
-            feat_keys: List[str] = ['intensity']
+            scale_range: Tuple[float, float] = (0.9, 1.1)
         ) -> None:
-        self._folder = Path(folder)
+        self._folder = folder
         self._extensions = ('.laz', '.las')
 
         self._feat_channels = len(feat_keys)
@@ -38,8 +39,23 @@ class MixedDataset:
         )
 
         train_idx = int(train_pct * len(files))
-        self._train_dataset = Dataset(files[:train_idx], voxel_size=voxel_size, data_augmentation=data_augmentation, yaw_range=yaw_range, tilt_range=tilt_range, scale=scale, feat_keys=feat_keys)
-        self._val_dataset = Dataset(files[train_idx:], voxel_size=voxel_size, feat_keys=feat_keys)
+        self._train_dataset = Dataset(
+            files[:train_idx],
+            voxel_size=voxel_size,
+            feat_keys=feat_keys,
+            centroid_sigma=centroid_sigma,
+            data_augmentation=data_augmentation,
+            yaw_range=yaw_range,
+            tilt_range=tilt_range,
+            scale_range=scale_range
+        )
+
+        self._val_dataset = Dataset(
+            files[train_idx:],
+            voxel_size=voxel_size,
+            feat_keys=feat_keys,
+            centroid_sigma=centroid_sigma
+        )
 
     @property
     def feat_channels(self) -> int:

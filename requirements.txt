@@ -8,3 +8,4 @@ scipy
 matplotlib
 pandas
 tqdm
+python-dotenv

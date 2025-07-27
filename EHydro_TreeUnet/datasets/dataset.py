@@ -14,11 +14,12 @@ class Dataset:
     def __init__(self,
             files: List[Path],
             voxel_size: float,
+            feat_keys: List[str] =['intensity'],
+            centroid_sigma: float = 1.0,
             data_augmentation: float = 1.0,
             yaw_range: Tuple[float, float] = (0.0, 360.0),
             tilt_range: Tuple[float, float] = (-5.0, 5.0),
-            scale: Tuple[float, float] = (0.8, 1.2),
-            feat_keys: List[str] =['intensity']
+            scale_range: Tuple[float, float] = (0.8, 1.2)
         ) -> None:
 
         self._rng = np.random.default_rng()
@@ -26,11 +27,12 @@ class Dataset:
         self._feat_keys = feat_keys
 
         self._voxel_size = voxel_size
+        self._centroid_sigma = centroid_sigma
         self._len = int(len(self._files) * data_augmentation)
         
         self._yaw_range = yaw_range
         self._tilt_range = tilt_range
-        self._scale = scale
+        self._scale = scale_range
         
     def __getitem__(self, idx: int) -> Dict:
         if isinstance(idx, slice):
@@ -121,7 +123,7 @@ class Dataset:
         return dir, np.log1p(mag)
     '''
     
-    def _get_centroid_scores(self, voxels: np.ndarray, instance_labels: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+    def _get_centroid_scores(self, voxels: np.ndarray, instance_labels: np.ndarray) -> np.ndarray:
         heat_map = np.zeros((len(voxels), 1), dtype=np.float32)
 
         for instance_id in np.unique(instance_labels):
@@ -137,8 +139,8 @@ class Dataset:
             ctr_voxel = pts[ctr_idx]
 
             d2 = np.sum((pts - ctr_voxel) ** 2, axis=1)
-            mask = d2 < (3 * sigma) ** 2
-            heat_map[idx[mask], 0] = np.exp(-d2[mask] / (2 * (sigma ** 2)))
+            mask = d2 < (3 * self._centroid_sigma) ** 2
+            heat_map[idx[mask], 0] = np.exp(-d2[mask] / (2 * (self._centroid_sigma ** 2)))
 
         return heat_map
     

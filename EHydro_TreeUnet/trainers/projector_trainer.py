@@ -6,7 +6,7 @@ import torchsparse
 import pickle
 import numpy as np
 
-from typing import List, Optional, Dict, Iterator, Tuple
+from typing import List, Optional, Dict, Iterator, Tuple, Union
 
 from torch import nn, Tensor
 from torch.cuda import amp
@@ -28,30 +28,78 @@ from ..modules import FocalLoss
 class TreeProjectorTrainer:
     def __init__(
             self,
+            tree_projector_dir: str,
             dataset_folder: str,
+            version_name: str = 'tree_projector_weights.pth',
+
             voxel_size: float = 0.2,
+            feat_keys: List[str] = ['intensity'],
+            centroid_sigma: float = 1.0,
             train_pct: float = 0.8,
             data_augmentation_coef: float = 48.0,
-            epochs: int = 1,
-            feat_keys: List[str] = ['intensity'],
-            channels: List[int] = [16, 32, 64, 128],
-            latent_dim: int = 256,
-            instance_density: float = 0.01,
-            centroid_thres: float = 0.1,
-            descriptor_dim: int = 16,
-            batch_size: int = 1,
+            yaw_range: Tuple[float, float] = (0.0, 360.0),
+            tilt_range: Tuple[float, float] = (-5.0, 5.0),
+            scale_range: Tuple[float, float] = (0.9, 1.1),
+
             training: bool = True,
+            epochs: int = 1,
+            start_on_epoch: int = 0,
+            batch_size: int = 1,
             semantic_loss_coef: float = 1.0,
             centroid_loss_coef: float = 1.0,
             instance_loss_coef: float = 1.0,
-            output_dir: str = '.',
-            version_name: str = 'tree_projector_weights.pth',
-            start_on_epoch: int = 0
+
+            resnet_blocks: List[Tuple[int, int, Union[int, Tuple[int, int, int]], Union[int, Tuple[int, int, int]]]] = [
+                (3, 16, 3, 1),
+                (3, 32, 3, 2),
+                (3, 64, 3, 2),
+                (3, 128, 3, 2),
+                (1, 128, (1, 1, 3), (1, 1, 2)),
+            ],
+            latent_dim: int = 256,
+            instance_density: float = 0.01,
+            centroid_thres: float = 0.1,
+            descriptor_dim: int = 16
         ):
 
-        self._dataset = MixedDataset(folder=dataset_folder, voxel_size=voxel_size, train_pct=train_pct, data_augmentation=data_augmentation_coef, feat_keys=feat_keys)
-        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=4, pin_memory=True)
-        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
+        self._tree_projector_dir = Path(tree_projector_dir)
+        self._version_name = version_name.removesuffix('.pth')
+        self._stat_folder = self._tree_projector_dir / 'stats'
+        self._stat_folder.mkdir(parents=True, exist_ok=True)
+
+        self._weights_folder = self._tree_projector_dir / 'weights' / self._version_name
+        self._checkpoint_folder = self._weights_folder / 'checkpoints'
+
+        if start_on_epoch == 0:
+            shutil.rmtree(self._checkpoint_folder, ignore_errors=True)
+            self._checkpoint_folder.mkdir(parents=True, exist_ok = True)
+
+        self._dataset = MixedDataset(
+            folder=self._tree_projector_dir / 'datasets' / dataset_folder,
+            voxel_size=voxel_size,
+            feat_keys=feat_keys,
+            centroid_sigma=centroid_sigma,
+            train_pct=train_pct,
+            data_augmentation=data_augmentation_coef,
+            yaw_range=yaw_range,
+            tilt_range=tilt_range,
+            scale_range=scale_range
+        )
+
+        self._train_loader = DataLoader(
+            self._dataset.train_dataset,
+            batch_size=batch_size, collate_fn=sparse_collate_fn,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
+        )
+
+        self._val_loader = DataLoader(
+            self._dataset.val_dataset,
+            batch_size=batch_size,
+            collate_fn=sparse_collate_fn,
+            shuffle=True
+        )
 
         self._semantic_loss_coef = semantic_loss_coef
         self._centroid_loss_coef = centroid_loss_coef
@@ -61,20 +109,8 @@ class TreeProjectorTrainer:
         self._criterion_centroid = FocalLoss()
         self._criterion_bce = nn.BCEWithLogitsLoss(reduction='mean')
 
-        self._version_name = version_name.removesuffix('.pth')
         self._epochs = epochs
         self._start_on_epoch = start_on_epoch
-
-        self._output_dir = Path(output_dir)
-        self._stat_folder = self._output_dir / 'stats'
-        self._stat_folder.mkdir(parents=True, exist_ok=True)
-
-        self._weights_folder = self._output_dir / 'weights' / self._version_name
-        self._checkpoint_folder = self._weights_folder / 'checkpoints'
-
-        if start_on_epoch == 0:
-            shutil.rmtree(self._checkpoint_folder, ignore_errors=True)
-            self._checkpoint_folder.mkdir(parents=True, exist_ok = True)
 
         self._stats = None
         self._losses = None
@@ -83,7 +119,7 @@ class TreeProjectorTrainer:
         self._model = TreeProjector(
             in_channels=self._dataset.feat_channels,
             num_classes=self._dataset.num_classes,
-            channels=channels,
+            resnet_blocks=resnet_blocks,
             latent_dim=latent_dim,
             instance_density=instance_density,
             centroid_thres=centroid_thres,
@@ -96,6 +132,23 @@ class TreeProjectorTrainer:
         print(f"Parámetros totales: {total_params:,}")
         print(f"Parámetros entrenables: {trainable_params:,}")
 
+        print('Resnet generates features at the following scales:')
+        scales = [1, 1, 1]
+        scales_m = [0, 0, 0]
+        out_channels_total = 0
+        for i, (_, out_channels, _, strides) in enumerate(resnet_blocks):
+            if isinstance(strides, int):
+                strides = (strides, strides, strides)
+
+            scales = [scale * stride for scale, stride in zip(scales, strides)]
+            scales_m = [voxel_size * scale for scale in scales]
+
+            out_channels_total += out_channels
+            print(f'\t* ({scales_m[0]:.1f}, {scales_m[1]:.1f}, {scales_m[2]:.1f}) meters -> {out_channels} feats.')
+
+        scales_m = [3 * scale for scale in scales_m]
+        print(f'\nMinimum scene size: ({scales_m[0]:.1f}, {scales_m[1]:.1f}, {scales_m[2]:.1f}) meters')
+        print(f'Total channels in backbone: {out_channels_total} -> {latent_dim} in latent space.')
         if not training:
             self._load_weights()
 
@@ -172,7 +225,9 @@ class TreeProjectorTrainer:
         
         loss_inst = loss_bce + loss_dice
 
-        return self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
+        total_loss = self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
+
+        return total_loss, loss_sem, loss_centroid, loss_inst
 
     def _mask_iou(mask_pred: Tensor, mask_gt: Tensor) -> float:
         mask_pred = mask_pred.bool()
@@ -329,16 +384,17 @@ class TreeProjectorTrainer:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
                     
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
+                    loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
 
                 with torch.no_grad():
                     stats.append(stat)
-                    losses.append(loss.item())
+                    losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst.item()))
                     instance_output_labels = torch.argmax(instance_output.F, dim=1)
                     pbar.set_postfix({
                         'loss': f'{loss.item():.4f}',
                         'mIoU': f'{stat["miou"]:.4f}',
+                        'centroid loss': f'{loss_centroid.item():.4f}',
                         'mAP': f'{stat["map"]:.4f}',
                         'centroids found': f'{centroid_confidence_output.F.size(0)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                     })
@@ -398,10 +454,10 @@ class TreeProjectorTrainer:
                 with amp.autocast(enabled=True):
                     semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
+                    loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
 
-                losses.append(loss.item())
+                losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst.item()))
                 stats.append(stat)
 
                 voxels = semantic_output.C.cpu().numpy()
@@ -414,6 +470,7 @@ class TreeProjectorTrainer:
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
                     'mIoU': f'{stat["miou"]:.4f}',
+                    'centroid loss': f'{loss_centroid.item():.4f}',
                     'mAP': f'{stat["map"]:.4f}',
                     'centroids found': f'{centroid_confidence_output.shape[0]} ({len(np.unique(instance_output))}) / {len(np.unique(instance_labels_cpu))}'
                 })
