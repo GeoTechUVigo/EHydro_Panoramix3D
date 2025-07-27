@@ -20,7 +20,7 @@ class FocalLoss(nn.Module):
         gt_regr (batch x c x h x w)
         '''
 
-        pred = pred.clamp(min=1e-6)
+        pred = pred.clamp(min=1e-6, max=1 - 1e-6)
         pos_inds = gt.eq(1).float()
         neg_inds = gt.lt(1).float()
 

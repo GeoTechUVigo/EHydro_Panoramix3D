@@ -10,8 +10,6 @@ CHANNELS = [8, 16, 32, 64, 128]
 LATENT_DIM = 256
 INSTANCE_DENSITY = 0.01
 CENTROID_THRES = 0.1
-PEAK_RADIUS = 1
-MIN_SCORE_FOR_CENTROID = 0.2
 DESCRIPTOR_DIM = 32
 TRAIN_PCT = 0.9
 VOXEL_SIZE = 0.2
@@ -34,8 +32,6 @@ def main():
         latent_dim=LATENT_DIM,
         instance_density=INSTANCE_DENSITY,
         centroid_thres=CENTROID_THRES,
-        peak_radius=PEAK_RADIUS,
-        min_score_for_center=MIN_SCORE_FOR_CENTROID,
         descriptor_dim=DESCRIPTOR_DIM,
         batch_size=BATCH_SIZE,
         training=True,

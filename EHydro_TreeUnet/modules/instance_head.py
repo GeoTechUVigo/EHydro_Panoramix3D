@@ -1,18 +1,15 @@
 import torch
-import torchsparse
-import spconv.pytorch as spconv
+import torch.nn.functional as F
 import spconv.pytorch.functional as spF
 
 from torch import nn, cat
 from torchsparse import nn as spnn, SparseTensor
 from spconv.pytorch import SparseConvTensor
 from spconv.pytorch.pool import SparseMaxPool, SparseAvgPool
-from torch_cluster import radius_graph
-from torch_scatter import scatter_max, scatter_mean
 
 
 class InstanceHead(nn.Module):
-    def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1, peak_radius: int = 1, min_score_for_center: int = 0.5):
+    def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1):
         super().__init__()
         self.voxel_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
         self.center_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
@@ -71,6 +68,9 @@ class InstanceHead(nn.Module):
 
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
         center_descriptors = self.center_descriptor(centroid_feats)
+
+        voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
+        center_descriptors.F = F.normalize(center_descriptors.F, p=2, dim=1)
 
         instance_output = voxel_descriptors.F @ cat([
             self.background_descriptor.unsqueeze(0),

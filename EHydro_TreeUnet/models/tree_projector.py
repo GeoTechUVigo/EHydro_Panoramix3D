@@ -15,8 +15,6 @@ class TreeProjector(nn.Module):
             latent_dim = 512,
             instance_density = 0.01,
             centroid_thres = 0.1,
-            peak_radius = 1,
-            min_score_for_center = 0.5,
             descriptor_dim = 16
         ):
         super().__init__()
@@ -32,7 +30,7 @@ class TreeProjector(nn.Module):
         self.voxel_decoder = VoxelDecoder(channels, latent_dim)
         self.semantic_head = spnn.Conv3d(latent_dim, num_classes, 1, bias=True)
         self.centroid_head = CentroidHead(latent_dim, instance_density=instance_density)
-        self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres, peak_radius=peak_radius, min_score_for_center=min_score_for_center)
+        self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres)
 
     def forward(self, x, centroid_score_labels = None):
         feats = self.voxel_decoder(self.encoder(x))

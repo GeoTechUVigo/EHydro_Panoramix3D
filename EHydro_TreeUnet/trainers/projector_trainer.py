@@ -35,8 +35,6 @@ class TreeProjectorTrainer:
             latent_dim = 256,
             instance_density = 0.01,
             centroid_thres = 0.1,
-            peak_radius = 1,
-            min_score_for_center = 0.5,
             descriptor_dim = 16,
             batch_size = 1,
             training = True,
@@ -62,8 +60,6 @@ class TreeProjectorTrainer:
             latent_dim=latent_dim,
             instance_density=instance_density,
             centroid_thres=centroid_thres,
-            peak_radius=peak_radius,
-            min_score_for_center=min_score_for_center,
             descriptor_dim=descriptor_dim
         )
 
@@ -306,7 +302,7 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch == 10:
+                    if epoch == 1:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs, centroid_score_labels)
                     else:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
