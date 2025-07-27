@@ -1,7 +1,7 @@
 import math
 
 from torch import nn
-from torchsparse import nn as spnn
+from torchsparse import nn as spnn, SparseTensor
 
 
 class CentroidHead(nn.Module):
@@ -13,7 +13,7 @@ class CentroidHead(nn.Module):
         nn.init.constant_(self.conv.bias, val = math.log(instance_density / (1 - instance_density)))
         # nn.init.kaiming_normal_(self.conv.kernel, mode='fan_out')
 
-    def forward(self, feats, semantic_output):
+    def forward(self, feats: SparseTensor, semantic_output: SparseTensor) -> SparseTensor:
         centroid_score = self.conv(feats)
         centroid_score.F = self.act(centroid_score.F)
         # centroid_score.F = centroid_score.F * (1.0 - semantic_output.F.softmax(dim=-1)[:, 0:1])

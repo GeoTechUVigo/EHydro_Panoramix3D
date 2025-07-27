@@ -6,11 +6,14 @@ import torchsparse
 import pickle
 import numpy as np
 
-from torch import nn
+from typing import List, Optional, Dict, Iterator, Tuple
+
+from torch import nn, Tensor
 from torch.cuda import amp
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
+from torchsparse import SparseTensor
 from torchsparse.utils.collate import sparse_collate_fn
 
 from pathlib import Path
@@ -25,32 +28,56 @@ from ..modules import FocalLoss
 class TreeProjectorTrainer:
     def __init__(
             self,
-            dataset_folder,
-            voxel_size = 0.2,
-            train_pct = 0.8,
-            data_augmentation_coef = 48.0,
-            epochs = 1,
-            feat_keys = ['intensity'],
-            channels = [16, 32, 64, 128],
-            latent_dim = 256,
-            instance_density = 0.01,
-            centroid_thres = 0.1,
-            descriptor_dim = 16,
-            batch_size = 1,
-            training = True,
-            semantic_loss_coef = 1.0,
-            centroid_loss_coef = 1.0,
-            instance_loss_coef = 1.0,
-            weights_file = 'tree_projector_weights.pth',
-            checkpoint_file = None
+            dataset_folder: str,
+            voxel_size: float = 0.2,
+            train_pct: float = 0.8,
+            data_augmentation_coef: float = 48.0,
+            epochs: int = 1,
+            feat_keys: List[str] = ['intensity'],
+            channels: List[int] = [16, 32, 64, 128],
+            latent_dim: int = 256,
+            instance_density: float = 0.01,
+            centroid_thres: float = 0.1,
+            descriptor_dim: int = 16,
+            batch_size: int = 1,
+            training: bool = True,
+            semantic_loss_coef: float = 1.0,
+            centroid_loss_coef: float = 1.0,
+            instance_loss_coef: float = 1.0,
+            output_dir: str = '.',
+            version_name: str = 'tree_projector_weights.pth',
+            start_on_epoch: int = 0
         ):
 
-        print(f'tf32 enabled: {torch.backends.cuda.matmul.allow_tf32}')
+        self._dataset = MixedDataset(folder=dataset_folder, voxel_size=voxel_size, train_pct=train_pct, data_augmentation=data_augmentation_coef, feat_keys=feat_keys)
+        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=4, pin_memory=True)
+        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
+
+        self._semantic_loss_coef = semantic_loss_coef
+        self._centroid_loss_coef = centroid_loss_coef
+        self._instance_loss_coef = instance_loss_coef
+
+        self._criterion_semantic = nn.CrossEntropyLoss()
+        self._criterion_centroid = FocalLoss()
+        self._criterion_bce = nn.BCEWithLogitsLoss(reduction='mean')
+
+        self._version_name = version_name.removesuffix('.pth')
+        self._epochs = epochs
+        self._start_on_epoch = start_on_epoch
+
+        self._output_dir = Path(output_dir)
+        self._stat_folder = self._output_dir / 'stats'
+        self._stat_folder.mkdir(parents=True, exist_ok=True)
+
+        self._weights_folder = self._output_dir / 'weights' / self._version_name
+        self._checkpoint_folder = self._weights_folder / 'checkpoints'
+
+        if start_on_epoch == 0:
+            shutil.rmtree(self._checkpoint_folder, ignore_errors=True)
+            self._checkpoint_folder.mkdir(parents=True, exist_ok = True)
 
         self._stats = None
         self._losses = None
-        self._dataset = MixedDataset(folder=dataset_folder, voxel_size=voxel_size, train_pct=train_pct, data_augmentation=data_augmentation_coef, feat_keys=feat_keys)
-        self._epochs = epochs
 
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._model = TreeProjector(
@@ -63,29 +90,11 @@ class TreeProjectorTrainer:
             descriptor_dim=descriptor_dim
         )
 
-        if torch.cuda.device_count() > 1:
-            print(f"Using {torch.cuda.device_count()} GPUs")
-            self._model = nn.DataParallel(self._model)
-        
         total_params = sum(p.numel() for p in self._model.parameters())
         trainable_params = sum(p.numel() for p in self._model.parameters() if p.requires_grad)
 
         print(f"Parámetros totales: {total_params:,}")
         print(f"Parámetros entrenables: {trainable_params:,}")
-
-        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=4, pin_memory=True)
-        self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
-
-        self._criterion_semantic = nn.CrossEntropyLoss()
-        self._criterion_centroid = FocalLoss()
-        self._criterion_bce = nn.BCEWithLogitsLoss(reduction='mean')
-
-        self._semantic_loss_coef = semantic_loss_coef
-        self._centroid_loss_coef = centroid_loss_coef
-        self._instance_loss_coef = instance_loss_coef
-
-        self._weights_file = weights_file
-        self._checkpoint_file = checkpoint_file
 
         if not training:
             self._load_weights()
@@ -93,22 +102,22 @@ class TreeProjectorTrainer:
         self._model.to(self._device)
 
     @property
-    def dataset(self):
+    def dataset(self) -> MixedDataset:
         return self._dataset
     
     @property
-    def stats(self):
+    def stats(self) -> Optional[List[Dict]]:
         return self._stats
     
     @property
-    def losses(self):
+    def losses(self) -> Optional[List[float]]:
         return self._losses
 
-    def _load_weights(self):
-        self._model.load_state_dict(torch.load(Path('./weights') / self._weights_file))
+    def _load_weights(self) -> None:
+        self._model.load_state_dict(torch.load(self._weights_folder / f'{self._version_name}_weights.pth'))
 
     @torch.no_grad()
-    def _apply_hungarian(self, logits, labels):
+    def _apply_hungarian(self, logits: SparseTensor, labels: Tensor) -> Tensor:
         batch_idx = logits.C[:, 0]
         logits = logits.F
         N, K = logits.shape
@@ -140,7 +149,16 @@ class TreeProjectorTrainer:
 
         return remapped
 
-    def _compute_loss(self, semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels):
+    def _compute_loss(
+            self,
+            semantic_output: SparseTensor,
+            semantic_labels: SparseTensor,
+            centroid_score_output: SparseTensor,
+            centroid_score_labels: SparseTensor,
+            instance_output: SparseTensor,
+            instance_labels: Tensor
+        ) -> Tensor:
+        
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F)
 
@@ -156,7 +174,7 @@ class TreeProjectorTrainer:
 
         return self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
 
-    def _mask_iou(mask_pred: torch.Tensor, mask_gt: torch.Tensor) -> float:
+    def _mask_iou(mask_pred: Tensor, mask_gt: Tensor) -> float:
         mask_pred = mask_pred.bool()
         mask_gt = mask_gt.bool()
 
@@ -169,7 +187,14 @@ class TreeProjectorTrainer:
         return (intersection / union).item()
 
     @torch.no_grad()    
-    def _compute_metrics(self, semantic_output, semantic_labels, instance_output, instance_labels, ignore_index = None):
+    def _compute_metrics(
+            self,
+            semantic_output: Tensor,
+            semantic_labels: Tensor,
+            instance_output: Tensor,
+            instance_labels: Tensor,
+            ignore_index: int = None
+        ) -> Dict:
         if ignore_index is not None:
             mask = semantic_labels != ignore_index
             semantic_output, semantic_labels = semantic_output[mask], semantic_labels[mask]
@@ -261,19 +286,15 @@ class TreeProjectorTrainer:
 
         return out_dict
     
-    def train(self):
-        checkpoints_folder = Path(f'./weights/{self._weights_file[:-4]}_checkpoints')
+    def train(self) -> None:
         optimizer = torch.optim.Adam(self._model.parameters(), lr=1e-3)
         scaler = amp.GradScaler(enabled=True)
         start_epoch = 1
         losses = []
         stats = []
 
-        if self._checkpoint_file is None:
-            shutil.rmtree(checkpoints_folder, ignore_errors=True)
-            checkpoints_folder.mkdir(parents=True, exist_ok = True)
-        else:
-            ckpt = torch.load(checkpoints_folder / self._checkpoint_file, map_location=self._device)
+        if self._start_on_epoch != 0:
+            ckpt = torch.load(self._checkpoint_folder / f'{self._version_name}_checkpoint_epoch_{self._start_on_epoch}.pth', map_location=self._device)
             self._model.load_state_dict(ckpt['model_state_dict'])
             self._model.to(device=self._device)
 
@@ -306,6 +327,7 @@ class TreeProjectorTrainer:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs, centroid_score_labels)
                     else:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
+                    
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
                     loss = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
                     stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
@@ -332,7 +354,7 @@ class TreeProjectorTrainer:
                 'scaler_state_dict': scaler.state_dict(),
                 'losses': losses,
                 'stats': stats
-            }, checkpoints_folder / f'{self._weights_file[:-4]}_checkpoint_epoch_{epoch}.pth')
+            }, self._checkpoint_folder / f'{self._version_name}_checkpoint_epoch_{epoch}.pth')
 
             print(f"\n✅ Epoch {epoch} finished.")
             if self._epochs > 0:
@@ -343,17 +365,16 @@ class TreeProjectorTrainer:
                 print("🔴 Training stopped by the user.")
                 break
 
-        torch.save(self._model.state_dict(), Path('./weights') / self._weights_file)
+        torch.save(self._model.state_dict(), self._weights_folder / f'{self._version_name}_weights.pth')
         self._stats = stats
         self._losses = losses
 
-        Path('./stats').mkdir(parents=False, exist_ok = True)
-        with open('./stats/stats.pkl', 'wb') as f:
+        with open(self._stat_folder / 'stats.pkl', 'wb') as f:
             pickle.dump(self._stats, f)
-        with open('./stats/losses.pkl', 'wb') as f:
+        with open(self._stat_folder / 'losses.pkl', 'wb') as f:
             pickle.dump(self._losses, f)
 
-    def eval(self):
+    def eval(self) -> Iterator[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         self._model.eval()
         losses = []
         stats = []

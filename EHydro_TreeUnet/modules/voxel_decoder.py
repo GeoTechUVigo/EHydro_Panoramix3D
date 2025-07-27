@@ -1,12 +1,14 @@
 import torch
 
+from typing import List
+
 from torch import nn, cat
-from torchsparse import nn as spnn
+from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.modules import SparseConvBlock
 
 
 class VoxelDecoder(nn.Module):
-    def __init__(self, channels = [16, 32, 64, 128], latent_dim = 512):
+    def __init__(self, channels: List[int] = [16, 32, 64, 128], latent_dim: int = 512):
         super().__init__()
 
         self.upsample = nn.ModuleList()
@@ -37,7 +39,7 @@ class VoxelDecoder(nn.Module):
             SparseConvBlock(latent_dim - 3, latent_dim - 3, kernel_size=1)
         )
     
-    def forward(self, x):
+    def forward(self, x: SparseTensor) -> SparseTensor:
         for i in range(len(x)-2, -1, -1):
             x[-1] = self.upsample[i](x[-1])
             x[-1].F = cat([x[-1].F, x[i].F], dim=1)
@@ -47,7 +49,7 @@ class VoxelDecoder(nn.Module):
         mix.F = cat([mix.F, mix.C[:, 1:]], dim=1)
         return mix
     
-    def _init_trilinear3d(self, conv):
+    def _init_trilinear3d(self, conv: spnn.Conv3d) -> None:
         K = conv.kernel_size[0]
         factor  = (K + 1) // 2
         center  = factor - 1 if K % 2 else factor - 0.5

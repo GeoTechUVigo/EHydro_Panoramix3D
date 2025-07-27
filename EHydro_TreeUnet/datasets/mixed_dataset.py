@@ -1,20 +1,22 @@
 import numpy as np
 
-from .dataset import Dataset
 from pathlib import Path
+from typing import Tuple, List
+
+from .dataset import Dataset
 
 
 class MixedDataset:
     def __init__(
             self,
-            folder,
+            folder: str,
             voxel_size: float = 0.2,
             train_pct: float = 0.8,
             data_augmentation: float = 1.0,
-            yaw_range = (0, 360),
-            tilt_range = (-5, 5),
-            scale = (0.9, 1.1),
-            feat_keys=['intensity']
+            yaw_range: Tuple[float, float] = (0.0, 360.0),
+            tilt_range: Tuple[float, float] = (-5.0, 5.0),
+            scale: Tuple[float, float] = (0.9, 1.1),
+            feat_keys: List[str] = ['intensity']
         ) -> None:
         self._folder = Path(folder)
         self._extensions = ('.laz', '.las')
@@ -40,26 +42,26 @@ class MixedDataset:
         self._val_dataset = Dataset(files[train_idx:], voxel_size=voxel_size, feat_keys=feat_keys)
 
     @property
-    def feat_channels(self):
+    def feat_channels(self) -> int:
         return self._feat_channels
     
     @property
-    def num_classes(self):
+    def num_classes(self) -> int:
         return self._num_classes
 
     @property
-    def class_names(self):
+    def class_names(self) -> List[str]:
         return self._class_names
     
     @property
-    def class_colormap(self):
+    def class_colormap(self) -> np.ndarray:
         return self._class_colormap
     
     @property
-    def train_dataset(self):
+    def train_dataset(self) -> Dataset:
         return self._train_dataset
     
     @property
-    def val_dataset(self):
+    def val_dataset(self) -> Dataset:
         return self._val_dataset
     

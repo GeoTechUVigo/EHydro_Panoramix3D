@@ -2,14 +2,25 @@ import torch
 import numpy as np
 
 import laspy
-from plyfile import PlyData
+
+from typing import Tuple, List, Dict
+from pathlib import Path
 
 from torchsparse import SparseTensor
 from torchsparse.utils.quantize import sparse_quantize
 
 
 class Dataset:
-    def __init__(self, files, voxel_size: float, data_augmentation: float = 1.0, yaw_range = (0, 360), tilt_range = (-5, 5), scale = (0.8, 1.2), feat_keys=['intensity']) -> None:
+    def __init__(self,
+            files: List[Path],
+            voxel_size: float,
+            data_augmentation: float = 1.0,
+            yaw_range: Tuple[float, float] = (0.0, 360.0),
+            tilt_range: Tuple[float, float] = (-5.0, 5.0),
+            scale: Tuple[float, float] = (0.8, 1.2),
+            feat_keys: List[str] =['intensity']
+        ) -> None:
+
         self._rng = np.random.default_rng()
         self._files = files
         self._feat_keys = feat_keys
@@ -21,7 +32,7 @@ class Dataset:
         self._tilt_range = tilt_range
         self._scale = scale
         
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict:
         if isinstance(idx, slice):
             return [self._preprocess(i) for i in range(*idx.indices(len(self)))]
         elif isinstance(idx, int):
@@ -33,10 +44,10 @@ class Dataset:
         else:
             raise TypeError("Index must be a slice or an integer")
         
-    def __len__(self):
+    def __len__(self) -> int:
         return self._len
     
-    def _load_file(self, path):
+    def _load_file(self, path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         ext = path.suffix.lower()
 
         coords = ...
@@ -60,7 +71,7 @@ class Dataset:
 
         return coords, feats, semantic_labels, instance_labels
     
-    def _agument_data(self, coords):
+    def _agument_data(self, coords: np.ndarray) -> np.ndarray:
         yaw = np.deg2rad(self._rng.uniform(*self._yaw_range))
         pitch = np.deg2rad(self._rng.uniform(*self._tilt_range))
         roll = np.deg2rad(self._rng.uniform(*self._tilt_range))
@@ -82,7 +93,8 @@ class Dataset:
 
         return (coords @ rotation_mtx.T) * scale
     
-    def _get_instance_offsets(self, voxels, semantic_labels, instance_labels):
+    '''
+    def _get_instance_offsets(self, voxels: np.ndarray, semantic_labels: np.ndarray, instance_labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         unique_labels, inverse_indices = np.unique(instance_labels, return_inverse=True)
         n_instances = len(unique_labels)
         # print(f'Numero de instancias: {n_instances}')
@@ -107,8 +119,9 @@ class Dataset:
         dir[mask] = offsets[mask] / mag[mask]
 
         return dir, np.log1p(mag)
+    '''
     
-    def _get_centroid_scores(self, voxels, instance_labels, sigma=1.0):
+    def _get_centroid_scores(self, voxels: np.ndarray, instance_labels: np.ndarray, sigma: float = 1.0) -> np.ndarray:
         heat_map = np.zeros((len(voxels), 1), dtype=np.float32)
 
         for instance_id in np.unique(instance_labels):
@@ -129,7 +142,7 @@ class Dataset:
 
         return heat_map
     
-    def _preprocess(self, idx: int):
+    def _preprocess(self, idx: int) -> Dict:
         coords, feat, semantic_labels, instance_labels = self._load_file(self._files[idx % len(self._files)])
         if idx >= len(self._files):
             coords = self._agument_data(coords)

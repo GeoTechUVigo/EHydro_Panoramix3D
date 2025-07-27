@@ -3,8 +3,9 @@ from EHydro_TreeUnet.trainers import TreeProjectorTrainer
 
 
 DATASET_FOLDER = Path.home() / 'datasets/MixedDataset'
-WEIGHTS_FILE = 'tree_projector_VS-0.2_DA-48_E-3.pth'
-CHECKPOINT_FILE = None
+OUTPUT_DIR = Path.home() / 'tree_projector_output'
+VERSION_NAME = 'tree_projector_instance_VS-0.2_DA-48_E-3_v2'
+START_ON_EPOCH = 0
 FEAT_KEYS = ['intensity']
 CHANNELS = [8, 16, 32, 64, 128]
 LATENT_DIM = 256
@@ -38,8 +39,9 @@ def main():
         semantic_loss_coef=SEMANTIC_LOSS_COEF,
         centroid_loss_coef=CENTROID_LOSS_COEF,
         instance_loss_coef=INSTANCE_LOSS_COEF,
-        weights_file=WEIGHTS_FILE,
-        checkpoint_file=CHECKPOINT_FILE
+        output_dir=OUTPUT_DIR,
+        version_name=VERSION_NAME,
+        start_on_epoch=START_ON_EPOCH
     )
 
     tester.train()

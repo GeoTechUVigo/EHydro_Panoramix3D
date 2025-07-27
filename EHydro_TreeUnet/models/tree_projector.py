@@ -1,8 +1,8 @@
-import torch
+from typing import Tuple
 
-from ..modules import VoxelDecoder, DirHead, MagHead, InstanceHead, CentroidHead
+from ..modules import VoxelDecoder, InstanceHead, CentroidHead
 from torch import nn
-from torchsparse import nn as spnn
+from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.resnet import SparseResNet
 
 
@@ -32,7 +32,7 @@ class TreeProjector(nn.Module):
         self.centroid_head = CentroidHead(latent_dim, instance_density=instance_density)
         self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres)
 
-    def forward(self, x, centroid_score_labels = None):
+    def forward(self, x: SparseTensor, centroid_score_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
         feats = self.voxel_decoder(self.encoder(x))
         semantic_output = self.semantic_head(feats)
         centroid_score_output = self.centroid_head(feats, semantic_output)

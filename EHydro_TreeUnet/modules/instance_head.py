@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
-import spconv.pytorch.functional as spF
+
+from typing import Tuple
 
 from torch import nn, cat
 from torchsparse import nn as spnn, SparseTensor
@@ -23,7 +24,7 @@ class InstanceHead(nn.Module):
         self._tau = tau
 
     @torch.no_grad()
-    def _find_centroid_peaks(self, voxel_feats: SparseTensor, centroid_confidences: SparseTensor):
+    def _find_centroid_peaks(self, voxel_feats: SparseTensor, centroid_confidences: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         mask = (centroid_confidences.F > self._tau).squeeze(1)
         if mask.sum() == 0:
             empty_coords = voxel_feats.C.new_empty(0, voxel_feats.C.size(1))
@@ -63,7 +64,7 @@ class InstanceHead(nn.Module):
 
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
-    def forward(self, voxel_feats, centroid_scores):
+    def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores)
 
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
