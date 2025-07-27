@@ -1,8 +1,4 @@
 import math
-import torch
-import torch.nn.functional as F
-
-import torchsparse.nn.functional as spF
 
 from torch import nn
 from torchsparse import nn as spnn

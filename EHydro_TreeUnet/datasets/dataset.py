@@ -117,9 +117,13 @@ class Dataset:
 
             idx = np.where(instance_labels == instance_id)[0]
             pts = voxels[idx]
-            ctr = np.round(pts.mean(axis=0)).astype(int)
-            d2 = np.sum((pts - ctr) ** 2, axis=1)
 
+            ctr = pts.mean(axis=0)
+            d2 = np.sum((pts - ctr) ** 2, axis=1)
+            ctr_idx = np.argmin(d2)
+            ctr_voxel = pts[ctr_idx]
+
+            d2 = np.sum((pts - ctr_voxel) ** 2, axis=1)
             mask = d2 < (3 * sigma) ** 2
             heat_map[idx[mask], 0] = np.exp(-d2[mask] / (2 * (sigma ** 2)))
 

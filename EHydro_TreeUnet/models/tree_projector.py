@@ -2,7 +2,7 @@ import torch
 
 from ..modules import VoxelDecoder, DirHead, MagHead, InstanceHead, CentroidHead
 from torch import nn
-from torchsparse import nn as spnn, SparseTensor
+from torchsparse import nn as spnn
 from torchsparse.backbones.resnet import SparseResNet
 
 
@@ -37,7 +37,6 @@ class TreeProjector(nn.Module):
     def forward(self, x, centroid_score_labels = None):
         feats = self.voxel_decoder(self.encoder(x))
         semantic_output = self.semantic_head(feats)
-        
         centroid_score_output = self.centroid_head(feats, semantic_output)
 
         if centroid_score_labels is None:

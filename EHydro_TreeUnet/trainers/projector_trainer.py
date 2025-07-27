@@ -2,13 +2,9 @@ import itertools
 import shutil
 import torch
 
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32  = False
-
 import torchsparse
 import pickle
 import numpy as np
-import matplotlib.pyplot as plt
 
 from torch import nn
 from torch.cuda import amp
@@ -19,7 +15,6 @@ from torchsparse.utils.collate import sparse_collate_fn
 
 from pathlib import Path
 from scipy.optimize import linear_sum_assignment
-from sklearn.cluster import DBSCAN
 from tqdm import tqdm
 
 from ..datasets import MixedDataset
@@ -82,7 +77,7 @@ class TreeProjectorTrainer:
         print(f"Parámetros totales: {total_params:,}")
         print(f"Parámetros entrenables: {trainable_params:,}")
 
-        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=8, pin_memory=True)
+        self._train_loader = DataLoader(self._dataset.train_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True, num_workers=4, pin_memory=True)
         self._val_loader = DataLoader(self._dataset.val_dataset, batch_size=batch_size, collate_fn=sparse_collate_fn, shuffle=True)
 
         self._criterion_semantic = nn.CrossEntropyLoss()
@@ -311,7 +306,7 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch == 1:
+                    if epoch == 10:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs, centroid_score_labels)
                     else:
                         semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
