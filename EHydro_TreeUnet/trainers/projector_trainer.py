@@ -189,7 +189,7 @@ class TreeProjectorTrainer:
             uniq = torch.unique(labels_b, sorted=True)
             uniq = uniq[uniq != 0]
             M = len(uniq)
-            if (K - 1) == 0 or M == 0:
+            if (K - 1) <= 0 or M == 0:
                 continue
 
             cost = torch.empty((M, K - 1), device=device)

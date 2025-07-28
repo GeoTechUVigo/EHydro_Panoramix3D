@@ -13,7 +13,7 @@ class InstanceHead(nn.Module):
     def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1):
         super().__init__()
         self.voxel_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
-        self.center_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
+        # self.center_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
 
         self.background_descriptor = nn.Parameter(torch.empty(descriptor_dim), requires_grad=True)
         nn.init.normal_(self.background_descriptor, mean=0., std=0.02)
@@ -47,7 +47,7 @@ class InstanceHead(nn.Module):
         hmax = self.max_pool(centroid_confidences_spconv)
         peak_feats = self.avg_pool(voxel_feats_spconv)
 
-        peak_mask = hmax.features[:, 0] == centroid_confidences_spconv.features[:, 0]
+        peak_mask = (hmax.features[:, 0] == centroid_confidences_spconv.features[:, 0]) & (hmax.features[:, 0] > 0.2)
         if peak_mask.sum() == 0:
             empty_coords = voxel_feats.C.new_empty(0, voxel_feats.C.size(1))
             return SparseTensor(coords=empty_coords, feats=voxel_feats.F.new_empty(0, voxel_feats.F.size(1))), SparseTensor(coords=empty_coords, feats=voxel_feats.F.new_empty(0, 1))
@@ -68,15 +68,15 @@ class InstanceHead(nn.Module):
         centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores)
 
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
-        center_descriptors = self.center_descriptor(centroid_feats)
+        center_descriptors = self.voxel_descriptor(centroid_feats)
 
         voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
         center_descriptors.F = F.normalize(center_descriptors.F, p=2, dim=1)
 
-        batches = torch.unique(center_descriptors.C[:, 0]).tolist()
+        batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
         full_center_descriptors = torch.zeros((center_descriptors.F.size(0) + len(batches), center_descriptors.F.size(1)), dtype=center_descriptors.F.dtype, device=center_descriptors.F.device)
         curr_idx = 0
-        
+
         for batch in batches:
             batch_mask = center_descriptors.C[:, 0] == batch
 

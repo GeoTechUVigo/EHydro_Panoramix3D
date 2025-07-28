@@ -14,7 +14,7 @@ VERSION_NAME = 'tree_projector_instance_VS-0.2_DA-48_E-3_v2'
 
 VOXEL_SIZE = 0.2
 FEAT_KEYS = ['intensity']
-CENTROID_SIGMA = 1.0
+CENTROID_SIGMA = 1.5
 TRAIN_PCT = 0.9
 DATA_AUGMENTATION_COEF = 48
 
