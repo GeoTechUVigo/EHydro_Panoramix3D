@@ -40,3 +40,21 @@ class FocalLoss(nn.Module):
         else:
             loss = loss - (pos_loss + neg_loss) / num_pos
         return loss
+
+
+class BCEPlusDice(nn.Module):
+    def __init__(self):
+        super(BCEPlusDice, self).__init__()
+        self._criterion_bce = nn.BCEWithLogitsLoss(reduction='mean')
+
+    def forward(self, pred: torch.Tensor, gt: torch.Tensor):
+        N, K = pred.shape
+        targets = torch.zeros((N, K), dtype=torch.float32, device=pred.device)
+        targets[torch.arange(N), gt] = 1.0
+
+        prob = torch.sigmoid(pred)
+        loss_bce = self._criterion_bce(pred, targets)
+        loss_dice = (1 - (2 * ( prob * targets).sum(0) + 1e-4) / (prob.sum(0) + targets.sum(0) + 1e-4)).mean()
+        
+        return loss_bce + loss_dice
+    

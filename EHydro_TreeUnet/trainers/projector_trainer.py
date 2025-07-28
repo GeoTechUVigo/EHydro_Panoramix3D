@@ -1,6 +1,7 @@
 import itertools
 import shutil
 import torch
+import sys
 
 import torchsparse
 import pickle
@@ -22,7 +23,7 @@ from tqdm import tqdm
 
 from ..datasets import MixedDataset
 from ..models import TreeProjector
-from ..modules import FocalLoss
+from ..modules import FocalLoss, BCEPlusDice
 
 
 class TreeProjectorTrainer:
@@ -107,7 +108,7 @@ class TreeProjectorTrainer:
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
-        self._criterion_bce = nn.BCEWithLogitsLoss(reduction='mean')
+        self._criterion_instance = nn.CosineEmbeddingLoss(margin=0.2, reduction='mean')
 
         self._epochs = epochs
         self._start_on_epoch = start_on_epoch
@@ -208,22 +209,24 @@ class TreeProjectorTrainer:
             semantic_labels: SparseTensor,
             centroid_score_output: SparseTensor,
             centroid_score_labels: SparseTensor,
-            instance_output: SparseTensor,
+            voxel_descriptors: Tensor,
+            centroid_descriptors: Tensor,
+            instance_output: Tensor,
             instance_labels: Tensor
         ) -> Tensor:
         
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F)
 
-        N, K = instance_output.F.shape
-        targets = torch.zeros((N, K), dtype=torch.float32, device=instance_output.F.device)
-        targets[torch.arange(N), instance_labels] = 1.0
+        own_mask = (instance_labels.unsqueeze(1) == torch.arange(centroid_descriptors.size(0), device=centroid_descriptors.device).unsqueeze(0))
+        sim_matrix_masked = instance_output.clone()
+        sim_matrix_masked[own_mask] = -float('inf')
 
-        prob = torch.sigmoid(instance_output.F)
-        loss_bce = self._criterion_bce(instance_output.F, targets)
-        loss_dice = (1 - (2 * ( prob * targets).sum(0) + 1e-4) / (prob.sum(0) + targets.sum(0) + 1e-4)).mean()
-        
-        loss_inst = loss_bce + loss_dice
+        _, hard_neg_idx = sim_matrix_masked.max(dim=1)
+
+        loss_inst_pos = self._criterion_instance(voxel_descriptors, centroid_descriptors[instance_labels], torch.ones(voxel_descriptors.size(0), device=voxel_descriptors.device))
+        loss_inst_neg = self._criterion_instance(voxel_descriptors, centroid_descriptors[hard_neg_idx], -torch.ones(voxel_descriptors.size(0), device=voxel_descriptors.device))
+        loss_inst = loss_inst_pos + loss_inst_neg
 
         total_loss = self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
 
@@ -369,7 +372,7 @@ class TreeProjectorTrainer:
             if epoch == 3:
                 print('Training instance correlation with predictions.\n')
 
-            pbar = tqdm(self._train_loader, desc='[Train]')
+            pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout)
             for feed_dict in pbar:
                 inputs = feed_dict["inputs"].to(self._device)
                 semantic_labels = feed_dict["semantic_labels"].to(self._device)
@@ -379,24 +382,37 @@ class TreeProjectorTrainer:
     
                 with amp.autocast(enabled=True):
                     if epoch == 1:
-                        semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs, centroid_score_labels)
+                        semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs, centroid_score_labels)
                     else:
-                        semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
+                        semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs)
                     
-                    instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
-                    stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
+                    with torch.no_grad():
+                        instance_output = voxel_descriptors @ centroid_descriptors.T
+
+                    instance_labels_remap = self._apply_hungarian(SparseTensor(coords=semantic_output.C, feats=instance_output), instance_labels.F)
+
+                    loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(
+                        semantic_output=semantic_output,
+                        semantic_labels=semantic_labels,
+                        centroid_score_output=centroid_score_output,
+                        centroid_score_labels=centroid_score_labels,
+                        voxel_descriptors=voxel_descriptors,
+                        centroid_descriptors=centroid_descriptors,
+                        instance_output=instance_output,
+                        instance_labels=instance_labels_remap
+                    )
 
                 with torch.no_grad():
+                    stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output, instance_labels_remap)
                     stats.append(stat)
                     losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst.item()))
-                    instance_output_labels = torch.argmax(instance_output.F, dim=1)
+                    instance_output_labels = torch.argmax(instance_output, dim=1)
                     pbar.set_postfix({
                         'loss': f'{loss.item():.4f}',
                         'mIoU': f'{stat["miou"]:.4f}',
                         'centroid loss': f'{loss_centroid.item():.4f}',
                         'mAP': f'{stat["map"]:.4f}',
-                        'centroids found': f'{centroid_confidence_output.F.size(0)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
+                        'centroids found': f'{centroid_descriptors.size(0)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                     })
 
                 scaler.scale(loss).backward()
@@ -440,7 +456,7 @@ class TreeProjectorTrainer:
         torchsparse.backends.benchmark = True  # type: ignore
 
         with torch.no_grad():
-            pbar = tqdm(self._val_loader, desc='[Inference]')
+            pbar = tqdm(self._val_loader, desc='[Inference]', file=sys.stdout)
             for feed_dict in pbar:
                 semantic_labels_cpu = feed_dict["semantic_labels"].F.numpy()
                 centroid_score_labels_cpu = feed_dict["centroid_score_labels"].F.numpy()
@@ -452,11 +468,23 @@ class TreeProjectorTrainer:
                 instance_labels = feed_dict["instance_labels"].to(self._device)
     
                 with amp.autocast(enabled=True):
-                    semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
-                    instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
-                    loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(semantic_output, semantic_labels, centroid_score_output, centroid_score_labels, instance_output, instance_labels_remap)
-                    stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
+                    semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs)
 
+                    instance_output = voxel_descriptors @ centroid_descriptors.T
+                    instance_labels_remap = self._apply_hungarian(instance_output, instance_labels.F)
+
+                    loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(
+                        semantic_output=semantic_output,
+                        semantic_labels=semantic_labels,
+                        centroid_score_output=centroid_score_output,
+                        centroid_score_labels=centroid_score_labels,
+                        voxel_descriptors=voxel_descriptors,
+                        centroid_descriptors=centroid_descriptors,
+                        instance_output=instance_output,
+                        instance_labels=instance_labels_remap
+                    )
+
+                stat = self._compute_metrics(semantic_output.F, semantic_labels.F, instance_output.F, instance_labels_remap)
                 losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst.item()))
                 stats.append(stat)
 

@@ -38,9 +38,9 @@ class TreeProjector(nn.Module):
         centroid_score_output = self.centroid_head(feats, semantic_output)
 
         if centroid_score_labels is None:
-            centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_output)
+            centroid_confidence_output, voxel_descriptors, center_descriptors = self.instance_head(feats, centroid_score_output)
         else:
-            centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_labels)
+            centroid_confidence_output, voxel_descriptors, center_descriptors = self.instance_head(feats, centroid_score_labels)
 
-        return semantic_output, centroid_score_output, centroid_confidence_output, instance_output
+        return semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, center_descriptors
     

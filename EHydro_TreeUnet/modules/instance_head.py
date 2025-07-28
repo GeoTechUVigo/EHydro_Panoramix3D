@@ -73,9 +73,18 @@ class InstanceHead(nn.Module):
         voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
         center_descriptors.F = F.normalize(center_descriptors.F, p=2, dim=1)
 
-        instance_output = voxel_descriptors.F @ cat([
-            self.background_descriptor.unsqueeze(0),
-            (centroid_confidences.F * center_descriptors.F)
-        ], dim=0).T
+        batches = torch.unique(center_descriptors.C[:, 0]).tolist()
+        full_center_descriptors = torch.zeros((center_descriptors.F.size(0) + len(batches), center_descriptors.F.size(1)), dtype=center_descriptors.F.dtype, device=center_descriptors.F.device)
+        curr_idx = 0
+        
+        for batch in batches:
+            batch_mask = center_descriptors.C[:, 0] == batch
 
-        return centroid_confidences, SparseTensor(coords=voxel_descriptors.C, feats=instance_output)
+            full_center_descriptors[curr_idx] = self.background_descriptor
+            curr_idx += 1
+
+            next_idx = curr_idx + batch_mask.sum().item()
+            full_center_descriptors[curr_idx:next_idx] = center_descriptors.F[batch_mask]
+            curr_idx = next_idx
+
+        return centroid_confidences, voxel_descriptors.F, full_center_descriptors
