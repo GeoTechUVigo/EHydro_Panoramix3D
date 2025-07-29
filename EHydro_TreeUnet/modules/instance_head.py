@@ -24,7 +24,7 @@ class InstanceHead(nn.Module):
         self._tau = tau
 
     @torch.no_grad()
-    def _find_centroid_peaks(self, voxel_feats: SparseTensor, centroid_confidences: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
+    def _find_centroid_peaks(self, voxel_feats: SparseTensor, centroid_confidences: SparseTensor, num_batches: int) -> Tuple[SparseTensor, SparseTensor]:
         mask = (centroid_confidences.F > self._tau).squeeze(1)
         if mask.sum() == 0:
             empty_coords = voxel_feats.C.new_empty(0, voxel_feats.C.size(1))
@@ -47,7 +47,7 @@ class InstanceHead(nn.Module):
         hmax = self.max_pool(centroid_confidences_spconv)
         peak_feats = self.avg_pool(voxel_feats_spconv)
 
-        peak_mask = (hmax.features[:, 0] == centroid_confidences_spconv.features[:, 0]) & (hmax.features[:, 0] > 0.2)
+        peak_mask = (hmax.features[:, 0] == centroid_confidences_spconv.features[:, 0])
         if peak_mask.sum() == 0:
             empty_coords = voxel_feats.C.new_empty(0, voxel_feats.C.size(1))
             return SparseTensor(coords=empty_coords, feats=voxel_feats.F.new_empty(0, voxel_feats.F.size(1))), SparseTensor(coords=empty_coords, feats=voxel_feats.F.new_empty(0, 1))
@@ -56,8 +56,9 @@ class InstanceHead(nn.Module):
         peak_scores = centroid_confidences_spconv.features[peak_mask]
         peak_feats = peak_feats.features[peak_mask]
 
-        if peak_scores.size(0) > 256:
-            peak_scores, topk_indices = torch.topk(peak_scores, k=256, dim=0)
+        max_peaks = num_batches * 128
+        if peak_scores.size(0) > max_peaks:
+            peak_scores, topk_indices = torch.topk(peak_scores, k=max_peaks, dim=0)
             topk_indices = topk_indices.squeeze(1)
             peak_coords = peak_coords[topk_indices]
             peak_feats = peak_feats[topk_indices]
@@ -65,26 +66,26 @@ class InstanceHead(nn.Module):
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
     def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
-        centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores)
+        batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
+        centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores, batches.size(0))
 
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
-        center_descriptors = self.voxel_descriptor(centroid_feats)
+        centroid_descriptors = self.voxel_descriptor(centroid_feats)
 
         voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
-        center_descriptors.F = F.normalize(center_descriptors.F, p=2, dim=1)
+        centroid_descriptors.F = F.normalize(centroid_descriptors.F, p=2, dim=1)
 
-        batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
-        full_center_descriptors = torch.zeros((center_descriptors.F.size(0) + len(batches), center_descriptors.F.size(1)), dtype=center_descriptors.F.dtype, device=center_descriptors.F.device)
+        full_centroid_descriptors = torch.zeros((centroid_descriptors.F.size(0) + len(batches), centroid_descriptors.F.size(1)), dtype=centroid_descriptors.F.dtype, device=centroid_descriptors.F.device)
         curr_idx = 0
 
         for batch in batches:
-            batch_mask = center_descriptors.C[:, 0] == batch
+            batch_mask = centroid_descriptors.C[:, 0] == batch
 
-            full_center_descriptors[curr_idx] = self.background_descriptor
+            full_centroid_descriptors[curr_idx] = self.background_descriptor
             curr_idx += 1
 
             next_idx = curr_idx + batch_mask.sum().item()
-            full_center_descriptors[curr_idx:next_idx] = center_descriptors.F[batch_mask]
+            full_centroid_descriptors[curr_idx:next_idx] = centroid_descriptors.F[batch_mask]
             curr_idx = next_idx
 
-        return centroid_confidences, voxel_descriptors.F, full_center_descriptors
+        return centroid_confidences, voxel_descriptors.F, full_centroid_descriptors
