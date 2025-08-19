@@ -192,10 +192,9 @@ class TreeProjectorTrainer:
                 continue
 
             labels_b = labels.F[mask]
-            logits_b = logits[mask][]
 
             uniq = torch.unique(labels_b, sorted=True)
-            uniq_fg = uniq_fg[uniq != 0]
+            uniq_fg = uniq[uniq != 0]
             C = uniq.shape[0]
             M = uniq_fg.shape[0]
 

@@ -66,10 +66,10 @@ class InstanceHead(nn.Module):
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
     def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
-        batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
-        centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores, batches.size(0))
-
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
+
+        batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
+        centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores, len(batches))
         centroid_descriptors = self.voxel_descriptor(centroid_feats)
 
         voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
