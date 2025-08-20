@@ -110,7 +110,8 @@ class TreeProjectorTrainer:
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
-        self._criterion_instance = nn.CosineEmbeddingLoss(margin=0.2, reduction='mean')
+        # self._criterion_instance = nn.CosineEmbeddingLoss(margin=0.2, reduction='mean')
+        self._criterion_instance = nn.CrossEntropyLoss()
 
         self._metric_semantic_iou = MulticlassJaccardIndex(num_classes=self._dataset.num_classes, average='none').to(device=self._device)
         self._metric_semantic_precision = Precision(task='multiclass', num_classes=self._dataset.num_classes, average='none').to(device=self._device)
@@ -181,11 +182,11 @@ class TreeProjectorTrainer:
     def _apply_hungarian(self, logits: SparseTensor, labels: SparseTensor) -> Tensor:
         batch_idx = logits.C[:, 0]
         logits = logits.F
-        N, K = logits.shape
+        _, K = logits.shape
         device = logits.device
         remapped = torch.zeros_like(labels.F, dtype=torch.long, device=labels.F.device)
 
-        offset = 0
+        offset = 1
         for b in torch.unique(batch_idx):
             mask = batch_idx == b
             if not mask.any():
@@ -195,10 +196,8 @@ class TreeProjectorTrainer:
 
             uniq = torch.unique(labels_b, sorted=True)
             uniq_fg = uniq[uniq != 0]
-            C = uniq.shape[0]
             M = uniq_fg.shape[0]
 
-            remapped[mask & (labels_b == 0)] = offset
             if (K - 1) == 0 or M == 0:
                 continue
 
@@ -210,7 +209,7 @@ class TreeProjectorTrainer:
             row, col = linear_sum_assignment(cost.detach().cpu())
 
             for r, c in zip(row, col):
-                remapped[mask & (labels.F == uniq_fg[r])] = c + offset + 1
+                remapped[mask & (labels.F == uniq_fg[r])] = c + offset
 
             offset += M
 
@@ -222,16 +221,15 @@ class TreeProjectorTrainer:
             semantic_labels: SparseTensor,
             centroid_score_output: SparseTensor,
             centroid_score_labels: SparseTensor,
-            centroid_confidences: SparseTensor,
-            voxel_descriptors: Tensor,
-            centroid_descriptors: Tensor,
-            instance_output: Tensor,
+            instance_output: SparseTensor,
             instance_labels: Tensor
         ) -> Tensor:
         
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F)
+        loss_inst = self._criterion_instance(instance_output.F, instance_labels)
 
+        '''
         own_mask = (instance_labels.unsqueeze(1) == torch.arange(centroid_descriptors.size(0), device=centroid_descriptors.device).unsqueeze(0))
         sim_matrix_masked = instance_output.clone()
         sim_matrix_masked[own_mask] = -float('inf')
@@ -241,7 +239,6 @@ class TreeProjectorTrainer:
             voxel_descriptors,
             centroid_descriptors[instance_labels],
             torch.ones(voxel_descriptors.size(0), device=voxel_descriptors.device)
-        
         )
 
         loss_inst_neg = self._criterion_instance(
@@ -267,6 +264,7 @@ class TreeProjectorTrainer:
         loss_inst_pos = (conf_pos * loss_inst_pos).sum() / (conf_pos.sum() + 1e-6)
         loss_inst_neg = (conf_neg * loss_inst_neg).sum() / (conf_neg.sum() + 1e-6)
         loss_inst = loss_inst_pos + loss_inst_neg
+        '''
 
         total_loss = self._semantic_loss_coef * loss_sem + self._centroid_loss_coef * loss_centroid + self._instance_loss_coef * loss_inst
 
@@ -277,7 +275,7 @@ class TreeProjectorTrainer:
             self,
             semantic_output: SparseTensor,
             semantic_labels: SparseTensor,
-            instance_output: Tensor,
+            instance_output: SparseTensor,
             instance_labels: Tensor,
         ) -> Dict:
 
@@ -287,13 +285,13 @@ class TreeProjectorTrainer:
         recall_semantic = self._metric_semantic_recall(semantic_output.F, semantic_labels.F)
         f1_semantic = self._metric_semantic_f1(semantic_output.F, semantic_labels.F)
         
-        num_instances = instance_output.size(1)
+        num_instances = instance_output.F.size(1)
 
         if num_instances == 1:
             miou_instance = torch.tensor([1.0], dtype=iou_semantic.dtype, device=iou_semantic.device)
         else:
-            metric_miou_instance = MulticlassJaccardIndex(num_classes=num_instances).to(instance_output.device)
-            miou_instance = metric_miou_instance(instance_output, instance_labels)
+            metric_miou_instance = MulticlassJaccardIndex(num_classes=num_instances).to(instance_output.F.device)
+            miou_instance = metric_miou_instance(instance_output.F, instance_labels)
 
         return {
             'iou_semantic': iou_semantic,
@@ -346,23 +344,17 @@ class TreeProjectorTrainer:
     
                 with amp.autocast(enabled=True):
                     if epoch < 3:
-                        semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs, centroid_score_labels)
+                        semantic_output, centroid_score_output, _, instance_output = self._model(inputs, centroid_score_labels)
                     else:
-                        semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs)
-                    
-                    with torch.no_grad():
-                        instance_output = voxel_descriptors @ centroid_descriptors.T
+                        semantic_output, centroid_score_output, _, instance_output = self._model(inputs)
 
-                    instance_labels_remap = self._apply_hungarian(SparseTensor(coords=semantic_output.C, feats=instance_output), instance_labels)
+                    instance_labels_remap = self._apply_hungarian(instance_output, instance_labels)
 
                     loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(
                         semantic_output=semantic_output,
                         semantic_labels=semantic_labels,
                         centroid_score_output=centroid_score_output,
                         centroid_score_labels=centroid_score_labels,
-                        centroid_confidences=centroid_confidence_output,
-                        voxel_descriptors=voxel_descriptors,
-                        centroid_descriptors=centroid_descriptors,
                         instance_output=instance_output,
                         instance_labels=instance_labels_remap
                     )
@@ -370,14 +362,14 @@ class TreeProjectorTrainer:
                 with torch.no_grad():
                     stat = self._compute_metrics(semantic_output, semantic_labels, instance_output, instance_labels_remap)
                     stats.append(stat)
-                    losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst.item()))
-                    instance_output_labels = torch.argmax(instance_output, dim=1)
+                    losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst))
+                    instance_output_labels = torch.argmax(instance_output.F, dim=1)
                     pbar.set_postfix({
                         'loss': f'{loss.item():.4f}',
                         'Sem mIoU': f'{stat["mean_iou_semantic"].item():.4f}',
                         'centroid loss': f'{loss_centroid.item():.4f}',
                         'Inst mIoU': f'{stat["mean_iou_instance"].item():.4f}',
-                        'centroids found': f'{centroid_descriptors.size(0)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
+                        'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels_remap))}'
                     })
 
                 scaler.scale(loss).backward()
@@ -433,9 +425,7 @@ class TreeProjectorTrainer:
                 instance_labels = feed_dict["instance_labels"].to(self._device)
     
                 with amp.autocast(enabled=True):
-                    semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs)
-
-                    instance_output = voxel_descriptors @ centroid_descriptors.T
+                    semantic_output, centroid_score_output, centroid_confidence_output, instance_output = self._model(inputs)
                     instance_labels_remap = self._apply_hungarian(SparseTensor(coords=semantic_output.C, feats=instance_output), instance_labels)
 
                     loss, loss_sem, loss_centroid, loss_inst = self._compute_loss(
@@ -443,9 +433,6 @@ class TreeProjectorTrainer:
                         semantic_labels=semantic_labels,
                         centroid_score_output=centroid_score_output,
                         centroid_score_labels=centroid_score_labels,
-                        centroid_confidences=centroid_confidence_output,
-                        voxel_descriptors=voxel_descriptors,
-                        centroid_descriptors=centroid_descriptors,
                         instance_output=instance_output,
                         instance_labels=instance_labels_remap
                     )
@@ -459,14 +446,14 @@ class TreeProjectorTrainer:
                 centroid_score_output = centroid_score_output.F.cpu().numpy()
                 centroid_voxels = centroid_confidence_output.C.cpu().numpy()
                 centroid_confidence_output = centroid_confidence_output.F.cpu().numpy()
-                instance_output = torch.argmax(instance_output, dim=1).cpu().numpy()
+                instance_output = torch.argmax(instance_output.F, dim=1).cpu().numpy()
 
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
                     'Sem mIoU': f'{stat["mean_iou_semantic"].item():.4f}',
                     'centroid loss': f'{loss_centroid.item():.4f}',
                     'Inst mIoU': f'{stat["mean_iou_instance"].item():.4f}',
-                    'centroids found': f'{centroid_descriptors.size(0)} ({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels.F))}'
+                    'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels_remap))}'
                 })
 
                 yield voxels, semantic_output, semantic_labels_cpu, centroid_score_output, centroid_score_labels_cpu, instance_output, instance_labels_cpu, centroid_voxels, centroid_confidence_output

@@ -5,6 +5,7 @@ from typing import Tuple
 
 from torch import nn, cat
 from torchsparse import nn as spnn, SparseTensor
+from torchsparse.backbones.modules import SparseConvBlock
 from spconv.pytorch import SparseConvTensor
 from spconv.pytorch.pool import SparseMaxPool, SparseAvgPool
 
@@ -12,15 +13,13 @@ from spconv.pytorch.pool import SparseMaxPool, SparseAvgPool
 class InstanceHead(nn.Module):
     def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1):
         super().__init__()
-        self.voxel_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
-        # self.center_descriptor = spnn.Conv3d(latent_dim, descriptor_dim, 1, bias=True)
-
-        self.background_descriptor = nn.Parameter(torch.empty(descriptor_dim), requires_grad=True)
-        nn.init.normal_(self.background_descriptor, mean=0., std=0.02)
+        self.voxel_descriptor = SparseConvBlock(in_channels=latent_dim, out_channels=descriptor_dim, kernel_size=1)
+        self.background_descriptor = nn.Parameter(torch.empty(1, descriptor_dim), requires_grad=True)
 
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
         self.avg_pool = SparseAvgPool(3, kernel_size=3, stride=1, padding=1, subm=True)
 
+        nn.init.normal_(self.background_descriptor, mean=0., std=0.02)
         self._tau = tau
 
     @torch.no_grad()
@@ -70,8 +69,11 @@ class InstanceHead(nn.Module):
 
         batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
         centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores, len(batches))
-        centroid_descriptors = self.voxel_descriptor(centroid_feats)
+        centroid_descriptors = cat([self.background_descriptor, centroid_confidences.F * self.voxel_descriptor(centroid_feats).F], dim=0)
 
+        instance_output = voxel_descriptors.F @ centroid_descriptors.T
+
+        '''
         voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
         centroid_descriptors.F = F.normalize(centroid_descriptors.F, p=2, dim=1)
 
@@ -87,5 +89,6 @@ class InstanceHead(nn.Module):
             next_idx = curr_idx + batch_mask.sum().item()
             full_centroid_descriptors[curr_idx:next_idx] = centroid_descriptors.F[batch_mask]
             curr_idx = next_idx
+        '''
 
-        return centroid_confidences, voxel_descriptors.F, full_centroid_descriptors
+        return centroid_confidences, SparseTensor(coords=voxel_feats.C, feats=instance_output)
