@@ -17,6 +17,9 @@ FEAT_KEYS = ['intensity']
 CENTROID_SIGMA = 1.5
 TRAIN_PCT = 0.9
 DATA_AUGMENTATION_COEF = 48
+YAW_RANGE = (0.0, 360.0)
+TILT_RANGE = (-5.0, 5.0)
+SCALE_RANGE = (0.9, 1.2)
 
 EPOCHS = 3
 START_ON_EPOCH = 0
@@ -32,10 +35,10 @@ RESNET_BLOCKS = [
     (3, 128, 3, 2),
     (1, 128, (1, 1, 3), (1, 1, 2)),
 ]
-LATENT_DIM = 256
+LATENT_DIM = 512
 INSTANCE_DENSITY = 0.01
 CENTROID_THRES = 0.1
-DESCRIPTOR_DIM = 32
+DESCRIPTOR_DIM = 128
 
 
 def main():
@@ -49,6 +52,9 @@ def main():
         centroid_sigma=CENTROID_SIGMA,
         train_pct=TRAIN_PCT,
         data_augmentation_coef=DATA_AUGMENTATION_COEF,
+        yaw_range=YAW_RANGE,
+        tilt_range=TILT_RANGE,
+        scale_range=SCALE_RANGE,
 
         training=True,
         epochs=EPOCHS,
