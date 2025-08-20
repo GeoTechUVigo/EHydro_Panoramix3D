@@ -2,6 +2,7 @@ numpy==1.26.4
 torch-scatter -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
 # torch-cluster -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
 spconv-cu121
+torchmetrics
 laspy
 plyfile
 open3d

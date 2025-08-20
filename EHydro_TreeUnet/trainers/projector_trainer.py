@@ -333,7 +333,7 @@ class TreeProjectorTrainer:
             print(f'\n=== Starting epoch {epoch} ===')
             if epoch < 3:
                 print('Training instance correlation with labels instead of predictions by now...\n')
-            if epoch == 3:
+            else:
                 print('Training instance correlation with predictions.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout)
@@ -345,7 +345,7 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch < 0:
+                    if epoch < 3:
                         semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs, centroid_score_labels)
                     else:
                         semantic_output, centroid_score_output, centroid_confidence_output, voxel_descriptors, centroid_descriptors = self._model(inputs)
