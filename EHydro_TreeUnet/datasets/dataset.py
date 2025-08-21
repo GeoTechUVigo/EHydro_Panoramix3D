@@ -95,11 +95,9 @@ class Dataset:
 
         return (coords @ rotation_mtx.T) * scale
     
-    '''
     def _get_instance_offsets(self, voxels: np.ndarray, semantic_labels: np.ndarray, instance_labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         unique_labels, inverse_indices = np.unique(instance_labels, return_inverse=True)
         n_instances = len(unique_labels)
-        # print(f'Numero de instancias: {n_instances}')
 
         sums = np.zeros((n_instances, 3), dtype=np.float64)
         counts = np.zeros(n_instances, dtype=np.int64)
@@ -113,15 +111,7 @@ class Dataset:
         offsets = centroids_per_point - voxels
         offsets[semantic_labels == 0] = 0
 
-        mag = np.linalg.norm(offsets, axis=1)
-        mask = mag > 0
-        mag = mag[:, None]
-
-        dir = np.zeros_like(offsets)
-        dir[mask] = offsets[mask] / mag[mask]
-
-        return dir, np.log1p(mag)
-    '''
+        return offsets
     
     def _get_centroid_scores(self, voxels: np.ndarray, instance_labels: np.ndarray) -> np.ndarray:
         heat_map = np.zeros((len(voxels), 1), dtype=np.float32)
@@ -155,32 +145,29 @@ class Dataset:
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
         instance_labels = instance_labels[indices]
-        # offset_dir_labels, offset_mag_labels = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
         centroid_score_labels = self._get_centroid_scores(voxels, instance_labels)
+        offset_labels = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
 
         voxels = torch.tensor(voxels, dtype=torch.int)
         feat = torch.tensor(feat.astype(np.float32), dtype=torch.float)
 
         semantic_labels = torch.tensor(semantic_labels, dtype=torch.long)
-        # offset_dir_labels = torch.tensor(offset_dir_labels, dtype=torch.float)
-        # offset_mag_labels = torch.tensor(offset_mag_labels, dtype=torch.float)
         centroid_score_labels = torch.tensor(centroid_score_labels, dtype=torch.float)
+        offset_labels = torch.tensor(offset_labels, dtype=torch.float)
         instance_labels = torch.tensor(instance_labels, dtype=torch.long)
 
         inputs = SparseTensor(coords=voxels, feats=feat)
         
         semantic_labels = SparseTensor(coords=voxels, feats=semantic_labels)
-        # offset_dir_labels = SparseTensor(coords=voxels, feats=offset_dir_labels)
-        # offset_mag_labels = SparseTensor(coords=voxels, feats=offset_mag_labels)
         centroid_score_labels = SparseTensor(coords=voxels, feats=centroid_score_labels)
+        offset_labels = SparseTensor(coords=voxels, feats=offset_labels)
         instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
 
         return {
             "inputs": inputs,
             "semantic_labels": semantic_labels,
-            # "offset_dir_labels": offset_dir_labels,
-            # "offset_mag_labels": offset_mag_labels,
             "centroid_score_labels": centroid_score_labels,
+            "offset_labels": offset_labels,
             "instance_labels": instance_labels
         }
     

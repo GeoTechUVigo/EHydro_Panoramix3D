@@ -26,6 +26,7 @@ START_ON_EPOCH = 0
 BATCH_SIZE = 1
 SEMANTIC_LOSS_COEF = 1.0
 CENTROID_LOSS_COEF = 1.0
+OFFSET_LOSS_COEF = 1.0
 INSTANCE_LOSS_COEF = 1.0
 
 RESNET_BLOCKS = [
@@ -38,7 +39,7 @@ RESNET_BLOCKS = [
 LATENT_DIM = 512
 INSTANCE_DENSITY = 0.01
 CENTROID_THRES = 0.1
-DESCRIPTOR_DIM = 128
+DESCRIPTOR_DIM = 64
 
 
 def main():
@@ -62,6 +63,7 @@ def main():
         batch_size=BATCH_SIZE,
         semantic_loss_coef=SEMANTIC_LOSS_COEF,
         centroid_loss_coef=CENTROID_LOSS_COEF,
+        offset_loss_coef=OFFSET_LOSS_COEF,
         instance_loss_coef=INSTANCE_LOSS_COEF,
 
         resnet_blocks=RESNET_BLOCKS,
