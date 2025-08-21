@@ -4,6 +4,7 @@ from ..modules import VoxelDecoder, CentroidHead, OffsetHead, InstanceHead
 from torch import nn
 from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.resnet import SparseResNet
+from torchsparse.backbones.modules import SparseConvBlock
 
 
 class TreeProjector(nn.Module):
@@ -28,10 +29,13 @@ class TreeProjector(nn.Module):
         
         self.encoder = SparseResNet(blocks=resnet_blocks,in_channels=in_channels)
         self.voxel_decoder = VoxelDecoder(resnet_blocks, latent_dim)
-        self.semantic_head = spnn.Conv3d(latent_dim, num_classes, 1, bias=True)
-        self.centroid_head = CentroidHead(latent_dim, instance_density=instance_density)
+        self.semantic_head = nn.Sequential(
+            SparseConvBlock(latent_dim, latent_dim // 2, 3),
+            SparseConvBlock(latent_dim // 2, num_classes, 3)
+        )
+        self.centroid_head = CentroidHead(latent_dim)
         self.offset_head = OffsetHead(latent_dim)
-        self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres)
+        self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres, instance_density=instance_density)
 
     def forward(self, x: SparseTensor, centroid_score_labels: SparseTensor = None, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
         feats = self.voxel_decoder(self.encoder(x))
@@ -39,10 +43,10 @@ class TreeProjector(nn.Module):
         centroid_score_output = self.centroid_head(feats, semantic_output)
         offset_output = self.offset_head(feats)
 
-        if centroid_score_labels is None or offset_labels is None:
-            centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_output, offset_output)
-        else:
-            centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_labels, offset_labels)
+        # if centroid_score_labels is None or offset_labels is None:
+        refined_centroid_scores, centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_output, offset_output)
+        # else:
+        #     refined_centroid_scores, centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_labels, offset_labels)
 
-        return semantic_output, centroid_score_output, offset_output, centroid_confidence_output, instance_output
+        return semantic_output, refined_centroid_scores, offset_output, centroid_confidence_output, instance_output
     

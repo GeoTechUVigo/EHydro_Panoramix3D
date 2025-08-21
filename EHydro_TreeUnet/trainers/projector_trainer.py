@@ -338,10 +338,10 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'Version name: {self._version_name}')
             print(f'\n=== Starting epoch {epoch} ===')
-            if epoch < 3:
-                print('Training instance correlation with labels instead of predictions by now...\n')
-            else:
-                print('Training instance correlation with predictions.\n')
+            #if epoch < 3:
+            #    print('Training instance correlation with labels instead of predictions by now...\n')
+            #else:
+            #    print('Training instance correlation with predictions.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout)
             for feed_dict in pbar:
@@ -353,10 +353,10 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch < 3:
-                        semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, centroid_score_labels, offset_labels)
-                    else:
-                        semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs)
+                    # if epoch < 3:
+                    #     semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, centroid_score_labels, offset_labels)
+                    # else:
+                    semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs)
 
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels)
 
@@ -382,7 +382,7 @@ class TreeProjectorTrainer:
                         'centroid loss': f'{loss_centroid.item():.4f}',
                         'offset loss': f'{loss_offset.item():.4f}',
                         'Inst mIoU': f'{stat["mean_iou_instance"]:.4f}',
-                        'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels_remap))}'
+                        'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                     })
 
                 scaler.scale(loss).backward()
@@ -463,7 +463,7 @@ class TreeProjectorTrainer:
                 centroid_score_output = centroid_score_output.F.cpu().numpy()
                 centroid_voxels = centroid_confidence_output.C.cpu().numpy()
                 centroid_confidence_output = centroid_confidence_output.F.cpu().numpy()
-                instance_output = torch.argmax(instance_output.F, dim=1).cpu().numpy()
+                instance_output_labels = torch.argmax(instance_output.F, dim=1).cpu().numpy()
 
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
@@ -471,10 +471,11 @@ class TreeProjectorTrainer:
                     'centroid loss': f'{loss_centroid.item():.4f}',
                     'offset loss': f'{loss_offset.item():.4f}',
                     'Inst mIoU': f'{stat["mean_iou_instance"]:.4f}',
-                    'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels_remap))}'
+                    'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels_remap))}',
+                    'centroids found': f'{instance_output.F.size(1)} ({len(np.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                 })
 
-                yield voxels, semantic_output, semantic_labels_cpu, centroid_score_output, centroid_score_labels_cpu, offset_output, offset_labels_cpu, instance_output, instance_labels_cpu, centroid_voxels, centroid_confidence_output
+                yield voxels, semantic_output, semantic_labels_cpu, centroid_score_output, centroid_score_labels_cpu, offset_output, offset_labels_cpu, instance_output_labels, instance_labels_cpu, centroid_voxels, centroid_confidence_output
         
         self._stats = stats
         self._losses = losses

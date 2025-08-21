@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn.functional as F
 import torchsparse.nn.functional as spf
@@ -13,21 +14,48 @@ from spconv.pytorch.pool import SparseMaxPool, SparseAvgPool
 
 
 class InstanceHead(nn.Module):
-    def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1):
+    def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1, instance_density: float = 0.01):
         super().__init__()
         # self.voxel_descriptor = SparseConvBlock(in_channels=latent_dim, out_channels=descriptor_dim, kernel_size=1)
+        self.background_descriptor = nn.Parameter(torch.empty(1, descriptor_dim), requires_grad=True)
         self.voxel_descriptor = nn.Sequential(
-            spnn.Conv3d(latent_dim, descriptor_dim, 1),
+            spnn.Conv3d(latent_dim, latent_dim // 2, 3),
+            spnn.ReLU(True),
+            spnn.Conv3d(latent_dim // 2, descriptor_dim, 1),
             spnn.ReLU(True),
         )
 
-        self.background_descriptor = nn.Parameter(torch.empty(1, descriptor_dim), requires_grad=True)
+        # self.voxel_descriptor = nn.Sequential(
+        #     SparseConvBlock(latent_dim, latent_dim // 2, 3),
+        #     SparseConvBlock(latent_dim // 2, descriptor_dim, 1)
+        # )
+
+        self.mixer = spnn.Conv3d(2, 1, 3, bias=True)
+        nn.init.constant_(self.mixer.bias, val = math.log(instance_density / (1 - instance_density)))
+        self.act = nn.Sigmoid()
 
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
         self.avg_pool = SparseAvgPool(3, kernel_size=3, stride=1, padding=1, subm=True)
 
         nn.init.normal_(self.background_descriptor, mean=0., std=0.02)
         self._tau = tau
+
+    def _union_sparse_layers(self, A: SparseTensor, B: SparseTensor) -> SparseTensor:
+        hashA = spf.sphash(A.C)
+        hashB = spf.sphash(B.C)
+
+        idxB_to_A = spf.sphashquery(hashB, hashA)
+        outB = torch.zeros(A.C.size(0), B.F.size(1), device=A.C.device, dtype=B.F.dtype)
+
+        mask = idxB_to_A >= 0
+        if mask.any():
+            rowsA = idxB_to_A[mask].to(torch.long)
+            rowsB = torch.nonzero(mask, as_tuple=False).squeeze(1)
+            outB.index_copy_(0, rowsA, B.F[rowsB])
+
+        out_feats = torch.cat([A.F, outB.to(A.F.dtype)], dim=1)
+
+        return SparseTensor(coords=A.C, feats=out_feats)
 
     @torch.no_grad()
     def _revoxelize(self, voxel_feats: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
@@ -61,7 +89,7 @@ class InstanceHead(nn.Module):
         return SparseTensor(coords=voxel_feats.C, feats=out_feats), SparseTensor(coords=voxel_feats.C, feats=out_scores)
 
     @torch.no_grad()
-    def _find_centroid_peaks(self, cluster_feats: SparseTensor, centroid_scores: SparseTensor, cluster_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
+    def _find_centroid_peaks(self, cluster_feats: SparseTensor, centroid_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         mask = (centroid_scores.F > self._tau).squeeze(1)
         if mask.sum() == 0:
             empty_coords = cluster_feats.C.new_empty(0, cluster_feats.C.size(1))
@@ -93,13 +121,19 @@ class InstanceHead(nn.Module):
 
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
-    def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
+    def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor, SparseTensor]:
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
 
         cluster_feats, cluster_scores = self._revoxelize(voxel_feats, offsets)
-        centroid_feats, centroid_confidences = self._find_centroid_peaks(cluster_feats, centroid_scores, cluster_scores)
-        centroid_descriptors = cat([self.background_descriptor, centroid_confidences.F * self.voxel_descriptor(centroid_feats).F], dim=0)
+        refined_centroid_scores = self.mixer(self._union_sparse_layers(centroid_scores, cluster_scores))
+        refined_centroid_scores.F = self.act(refined_centroid_scores.F)
+
+        centroid_feats, centroid_confidences = self._find_centroid_peaks(cluster_feats, refined_centroid_scores)
+        if centroid_feats.F.size(0) == 0:
+            centroid_descriptors = self.background_descriptor
+        else:
+            centroid_descriptors = cat([self.background_descriptor, centroid_confidences.F * self.voxel_descriptor(centroid_feats).F], dim=0)
 
         instance_output = voxel_descriptors.F @ centroid_descriptors.T
 
-        return centroid_confidences, SparseTensor(coords=voxel_feats.C, feats=instance_output)
+        return refined_centroid_scores, centroid_confidences, SparseTensor(coords=voxel_feats.C, feats=instance_output)
