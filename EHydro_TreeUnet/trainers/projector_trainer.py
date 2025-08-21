@@ -294,15 +294,15 @@ class TreeProjectorTrainer:
             miou_instance = metric_miou_instance(instance_output.F, instance_labels)
 
         return {
-            'iou_semantic': iou_semantic,
-            'mean_iou_semantic': iou_semantic.mean(dim=0),
-            'precision_semantic': precision_semantic,
-            'mean_precision_semantic': precision_semantic.mean(dim=0),
-            'recall_semantic': recall_semantic,
-            'mean_recall_semantic': recall_semantic.mean(dim=0),
-            'f1_semantic': f1_semantic,
-            'mean_f1_semantic': f1_semantic.mean(dim=0),
-            'mean_iou_instance': miou_instance
+            'iou_semantic': iou_semantic.cpu().numpy(),
+            'mean_iou_semantic': iou_semantic.mean(dim=0).item(),
+            'precision_semantic': precision_semantic.cpu().numpy(),
+            'mean_precision_semantic': precision_semantic.mean(dim=0).item(),
+            'recall_semantic': recall_semantic.cpu().numpy(),
+            'mean_recall_semantic': recall_semantic.mean(dim=0).item(),
+            'f1_semantic': f1_semantic.cpu().numpy(),
+            'mean_f1_semantic': f1_semantic.mean(dim=0).item(),
+            'mean_iou_instance': miou_instance.item()
         }
     
     def train(self) -> None:
@@ -362,13 +362,13 @@ class TreeProjectorTrainer:
                 with torch.no_grad():
                     stat = self._compute_metrics(semantic_output, semantic_labels, instance_output, instance_labels_remap)
                     stats.append(stat)
-                    losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst))
+                    losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_inst.item()))
                     instance_output_labels = torch.argmax(instance_output.F, dim=1)
                     pbar.set_postfix({
                         'loss': f'{loss.item():.4f}',
-                        'Sem mIoU': f'{stat["mean_iou_semantic"].item():.4f}',
+                        'Sem mIoU': f'{stat["mean_iou_semantic"]:.4f}',
                         'centroid loss': f'{loss_centroid.item():.4f}',
-                        'Inst mIoU': f'{stat["mean_iou_instance"].item():.4f}',
+                        'Inst mIoU': f'{stat["mean_iou_instance"]:.4f}',
                         'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels_remap))}'
                     })
 
@@ -450,9 +450,9 @@ class TreeProjectorTrainer:
 
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
-                    'Sem mIoU': f'{stat["mean_iou_semantic"].item():.4f}',
+                    'Sem mIoU': f'{stat["mean_iou_semantic"]:.4f}',
                     'centroid loss': f'{loss_centroid.item():.4f}',
-                    'Inst mIoU': f'{stat["mean_iou_instance"].item():.4f}',
+                    'Inst mIoU': f'{stat["mean_iou_instance"]:.4f}',
                     'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels_remap))}'
                 })
 

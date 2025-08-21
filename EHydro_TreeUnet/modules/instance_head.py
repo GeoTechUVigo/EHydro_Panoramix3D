@@ -13,7 +13,11 @@ from spconv.pytorch.pool import SparseMaxPool, SparseAvgPool
 class InstanceHead(nn.Module):
     def __init__(self, latent_dim, descriptor_dim, tau: float = 0.1):
         super().__init__()
-        self.voxel_descriptor = SparseConvBlock(in_channels=latent_dim, out_channels=descriptor_dim, kernel_size=1)
+        # self.voxel_descriptor = SparseConvBlock(in_channels=latent_dim, out_channels=descriptor_dim, kernel_size=1)
+        self.voxel_descriptor = nn.Sequential(
+            spnn.Conv3d(latent_dim, descriptor_dim, 1),
+            spnn.ReLU(True),
+        )
         self.background_descriptor = nn.Parameter(torch.empty(1, descriptor_dim), requires_grad=True)
 
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
@@ -23,7 +27,7 @@ class InstanceHead(nn.Module):
         self._tau = tau
 
     @torch.no_grad()
-    def _find_centroid_peaks(self, voxel_feats: SparseTensor, centroid_confidences: SparseTensor, num_batches: int) -> Tuple[SparseTensor, SparseTensor]:
+    def _find_centroid_peaks(self, voxel_feats: SparseTensor, centroid_confidences: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         mask = (centroid_confidences.F > self._tau).squeeze(1)
         if mask.sum() == 0:
             empty_coords = voxel_feats.C.new_empty(0, voxel_feats.C.size(1))
@@ -55,9 +59,8 @@ class InstanceHead(nn.Module):
         peak_scores = centroid_confidences_spconv.features[peak_mask]
         peak_feats = peak_feats.features[peak_mask]
 
-        max_peaks = num_batches * 128
-        if peak_scores.size(0) > max_peaks:
-            peak_scores, topk_indices = torch.topk(peak_scores, k=max_peaks, dim=0)
+        if peak_scores.size(0) > 256:
+            peak_scores, topk_indices = torch.topk(peak_scores, k=256, dim=0)
             topk_indices = topk_indices.squeeze(1)
             peak_coords = peak_coords[topk_indices]
             peak_feats = peak_feats[topk_indices]
@@ -67,8 +70,7 @@ class InstanceHead(nn.Module):
     def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         voxel_descriptors = self.voxel_descriptor(voxel_feats)
 
-        batches = torch.unique(voxel_descriptors.C[:, 0]).tolist()
-        centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores, len(batches))
+        centroid_feats, centroid_confidences = self._find_centroid_peaks(voxel_feats, centroid_scores)
         centroid_descriptors = cat([self.background_descriptor, centroid_confidences.F * self.voxel_descriptor(centroid_feats).F], dim=0)
 
         instance_output = voxel_descriptors.F @ centroid_descriptors.T
