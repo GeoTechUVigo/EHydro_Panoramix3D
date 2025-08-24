@@ -23,12 +23,12 @@ class MixedDataset:
         self._extensions = ('.laz', '.las')
 
         self._feat_channels = len(feat_keys)
-        self._num_classes = 4
-        self._class_names = ['Terrain', 'Low Vegetation', 'Stem', 'Canopy']
-        # self._class_names = ['Terrain', 'Stem', 'Canopy']
+        self._num_classes = 3
+        # self._class_names = ['Terrain', 'Low Vegetation', 'Stem', 'Canopy']
+        self._class_names = ['Terrain', 'Stem', 'Canopy']
         self._class_colormap = np.array([
             [128, 128, 128], # clase 0 - Terrain - gris
-            [147, 255, 138], # clase 1 - Low vegetation - verde claro
+            # [147, 255, 138], # clase 1 - Low vegetation - verde claro
             [255, 165, 0],   # clase 2 - Stem - naranja
             [0, 128, 0],     # clase 3 - Canopy - verde oscuro
         ], dtype=np.uint8)

@@ -19,10 +19,10 @@ class InstanceHead(nn.Module):
         # self.voxel_descriptor = SparseConvBlock(in_channels=latent_dim, out_channels=descriptor_dim, kernel_size=1)
         self.background_descriptor = nn.Parameter(torch.empty(1, descriptor_dim), requires_grad=True)
         self.voxel_descriptor = nn.Sequential(
-            spnn.Conv3d(latent_dim, latent_dim // 2, 3),
+            spnn.Conv3d(latent_dim, descriptor_dim, 1),
             spnn.ReLU(True),
-            spnn.Conv3d(latent_dim // 2, descriptor_dim, 1),
-            spnn.ReLU(True),
+            # spnn.Conv3d(latent_dim // 2, descriptor_dim, 1),
+            # spnn.ReLU(True),
         )
 
         # self.voxel_descriptor = nn.Sequential(

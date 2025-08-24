@@ -30,8 +30,8 @@ class TreeProjector(nn.Module):
         self.encoder = SparseResNet(blocks=resnet_blocks,in_channels=in_channels)
         self.voxel_decoder = VoxelDecoder(resnet_blocks, latent_dim)
         self.semantic_head = nn.Sequential(
-            SparseConvBlock(latent_dim, latent_dim // 2, 3),
-            SparseConvBlock(latent_dim // 2, num_classes, 3)
+            SparseConvBlock(latent_dim, num_classes, 1),
+            # SparseConvBlock(latent_dim // 2, num_classes, 3)
         )
         self.centroid_head = CentroidHead(latent_dim)
         self.offset_head = OffsetHead(latent_dim)

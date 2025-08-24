@@ -15,8 +15,8 @@ class CentroidHead(nn.Module):
         #     spnn.ReLU(True),
         # )
         self.conv = nn.Sequential(
-            SparseConvBlock(latent_dim, latent_dim // 2, 3),
-            SparseConvBlock(latent_dim // 2, 1, 1)
+            SparseConvBlock(latent_dim, 1, 1),
+            # SparseConvBlock(latent_dim // 2, 1, 1)
         )
 
         # self.conv = spnn.Conv3d(latent_dim, 1, 1, bias=True)
