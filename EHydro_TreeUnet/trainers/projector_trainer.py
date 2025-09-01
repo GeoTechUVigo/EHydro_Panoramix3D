@@ -272,7 +272,7 @@ class TreeProjectorTrainer:
             pred_masks = pred_masks[:, pred_keep]
             probs = probs[:, pred_keep]
         else:
-            return 0.0, torch.zeros_like(iou_thresholds), {"thr": float(thr.item()),
+            return 0.0, torch.zeros_like(iou_thresholds), {"thr": 0.5,
                 "tp": 0,
                 "fp": 0,
                 "fn": num_gt
