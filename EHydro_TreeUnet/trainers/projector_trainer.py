@@ -264,7 +264,7 @@ class TreeProjectorTrainer:
         gt_masks = (instance_labels.F.unsqueeze(1) == instance_labels_unique.unsqueeze(0))
         gt_masks_f = gt_masks.float()
 
-        probs = instance_output.F.sigmoid()
+        probs = F.softmax(instance_output.F, dim=1)
         pred_masks = probs > prob_threshold
 
         pred_keep = pred_masks.any(dim=0)
