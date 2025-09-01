@@ -251,7 +251,7 @@ class TreeProjectorTrainer:
         instance_labels: SparseTensor,
         prob_threshold: float = 0.5,
         iou_thresholds: torch.Tensor = None,
-        eps: float = 1e-7,
+        eps: float = 1e-6,
     ):
         device = instance_output.F.device
         if iou_thresholds is None:
@@ -260,11 +260,6 @@ class TreeProjectorTrainer:
         instance_labels_unique = torch.unique(instance_labels.F)
         instance_labels_unique = instance_labels_unique[instance_labels_unique > 0]
         num_gt = instance_labels_unique.numel()
-
-        if num_gt == 0:
-            return 0.0, torch.zeros_like(iou_thresholds), {
-                "num_gt": 0, "num_pred": int((instance_output.F.sigmoid() > prob_threshold).any(dim=0).sum().item())
-            }
 
         gt_masks = (instance_labels.F.unsqueeze(1) == instance_labels_unique.unsqueeze(0))
         gt_masks_f = gt_masks.float()
@@ -277,7 +272,11 @@ class TreeProjectorTrainer:
             pred_masks = pred_masks[:, pred_keep]
             probs = probs[:, pred_keep]
         else:
-            return 0.0, torch.zeros_like(iou_thresholds), {"num_gt": int(num_gt), "num_pred": 0}
+            return 0.0, torch.zeros_like(iou_thresholds), {"thr": float(thr.item()),
+                "tp": 0,
+                "fp": 0,
+                "fn": num_gt
+            }, 0.0
 
         K_eff = pred_masks.shape[1]
         pred_masks_f = pred_masks.float()
