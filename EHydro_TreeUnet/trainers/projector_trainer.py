@@ -236,43 +236,6 @@ class TreeProjectorTrainer:
         loss_offset = self._criterion_offset(offset_output.F, offset_labels.F)
         loss_inst = self._criterion_instance(instance_output.F, instance_labels.F)[0]
 
-        '''
-        own_mask = (instance_labels.unsqueeze(1) == torch.arange(centroid_descriptors.size(0), device=centroid_descriptors.device).unsqueeze(0))
-        sim_matrix_masked = instance_output.clone()
-        sim_matrix_masked[own_mask] = -float('inf')
-        _, hard_neg_idx = sim_matrix_masked.max(dim=1)
-
-        loss_inst_pos = self._criterion_instance(
-            voxel_descriptors,
-            centroid_descriptors[instance_labels],
-            torch.ones(voxel_descriptors.size(0), device=voxel_descriptors.device)
-        )
-
-        loss_inst_neg = self._criterion_instance(
-            voxel_descriptors,
-            centroid_descriptors[hard_neg_idx],
-            -torch.ones(voxel_descriptors.size(0), device=voxel_descriptors.device)
-        )
-
-        batches = torch.unique(semantic_output.C[:, 0]).tolist()
-        full_centroid_confidences = torch.ones((centroid_confidences.F.size(0) + len(batches), centroid_confidences.F.size(1)), dtype=centroid_confidences.F.dtype, device=centroid_confidences.F.device)
-        curr_idx = 1
-
-        for batch in batches:
-            batch_mask = centroid_confidences.C[:, 0] == batch
-
-            next_idx = curr_idx + batch_mask.sum().item()
-            full_centroid_confidences[curr_idx:next_idx] = centroid_confidences.F[batch_mask]
-            curr_idx = next_idx + 1
-
-        conf_pos = full_centroid_confidences[instance_labels]
-        conf_neg = full_centroid_confidences[hard_neg_idx]
-
-        loss_inst_pos = (conf_pos * loss_inst_pos).sum() / (conf_pos.sum() + 1e-6)
-        loss_inst_neg = (conf_neg * loss_inst_neg).sum() / (conf_neg.sum() + 1e-6)
-        loss_inst = loss_inst_pos + loss_inst_neg
-        '''
-
         total_loss = self._semantic_loss_coef * loss_sem + \
                     self._centroid_loss_coef * loss_centroid + \
                     self._offset_loss_coef * loss_offset + \
@@ -280,13 +243,123 @@ class TreeProjectorTrainer:
 
         return total_loss, loss_sem, loss_centroid, loss_offset, loss_inst
     
+    
+    @torch.no_grad()
+    def _compute_instance_ap(
+        self,
+        instance_output: SparseTensor,
+        instance_labels: SparseTensor,
+        prob_threshold: float = 0.5,
+        iou_thresholds: torch.Tensor = None,
+        eps: float = 1e-7,
+    ):
+        device = instance_output.F.device
+        if iou_thresholds is None:
+            iou_thresholds = torch.arange(0.50, 0.96, 0.05, device=device)
+
+        instance_labels_unique = torch.unique(instance_labels.F)
+        instance_labels_unique = instance_labels_unique[instance_labels_unique > 0]
+        num_gt = instance_labels_unique.numel()
+
+        if num_gt == 0:
+            return 0.0, torch.zeros_like(iou_thresholds), {
+                "num_gt": 0, "num_pred": int((instance_output.F.sigmoid() > prob_threshold).any(dim=0).sum().item())
+            }
+
+        gt_masks = (instance_labels.F.unsqueeze(1) == instance_labels_unique.unsqueeze(0))
+        gt_masks_f = gt_masks.float()
+
+        probs = instance_output.F.sigmoid()
+        pred_masks = probs > prob_threshold
+
+        pred_keep = pred_masks.any(dim=0)
+        if pred_keep.any():
+            pred_masks = pred_masks[:, pred_keep]
+            probs = probs[:, pred_keep]
+        else:
+            return 0.0, torch.zeros_like(iou_thresholds), {"num_gt": int(num_gt), "num_pred": 0}
+
+        K_eff = pred_masks.shape[1]
+        pred_masks_f = pred_masks.float()
+
+        scores = (probs * pred_masks_f).sum(dim=0) / (pred_masks_f.sum(dim=0).clamp_min(1.0))
+
+        order = torch.argsort(scores, descending=True)
+        pred_masks_f = pred_masks_f[:, order]
+        pred_masks = pred_masks[:, order]
+        scores = scores[order]
+
+        inter = pred_masks_f.T @ gt_masks_f
+        pred_area = pred_masks_f.sum(dim=0).unsqueeze(1)
+        gt_area = gt_masks_f.sum(dim=0).unsqueeze(0)
+        union = pred_area + gt_area - inter
+        iou_mat = inter / (union + eps)
+
+        ap_list = []
+        tps_fps_per_thr = []
+
+        for thr in iou_thresholds:
+            gt_taken = torch.zeros(num_gt, dtype=torch.bool, device=device)
+
+            tp = torch.zeros(K_eff, dtype=torch.int32, device=device)
+            fp = torch.zeros(K_eff, dtype=torch.int32, device=device)
+
+            for p in range(K_eff):
+                ious = iou_mat[p]  # (G,)
+                best_iou, best_g = torch.max(ious, dim=0)
+                if best_iou >= thr and not gt_taken[best_g]:
+                    tp[p] = 1
+                    gt_taken[best_g] = True
+                else:
+                    fp[p] = 1
+
+            tp_cum = torch.cumsum(tp, dim=0).float()
+            fp_cum = torch.cumsum(fp, dim=0).float()
+            recalls = tp_cum / max(num_gt, 1)
+            precisions = tp_cum / (tp_cum + fp_cum + eps)
+
+            mrec = torch.cat([torch.zeros(1, device=device), recalls, torch.ones(1, device=device)])
+            mpre = torch.cat([torch.zeros(1, device=device), precisions, torch.zeros(1, device=device)])
+
+            for i in range(mpre.numel() - 2, -1, -1):
+                if mpre[i] < mpre[i + 1]:
+                    mpre[i] = mpre[i + 1]
+
+            idx = (mrec[1:] != mrec[:-1]).nonzero(as_tuple=False).flatten()
+            ap = torch.sum((mrec[idx + 1] - mrec[idx]) * mpre[idx + 1])
+
+            ap_list.append(ap)
+            tps_fps_per_thr.append(
+                {"thr": float(thr.item()),
+                "tp": int(tp.sum().item()),
+                "fp": int(fp.sum().item()),
+                "fn": int(num_gt - tp.sum().item())}
+            )
+
+        ap_per_thr = torch.stack(ap_list).cpu().numpy()
+        mAP = float(ap_per_thr.mean())
+
+        tp = tps_fps_per_thr[0]['tp']
+        fp = tps_fps_per_thr[0]['fp']
+        fn = tps_fps_per_thr[0]['fn']
+
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+
+        if precision > 0 and recall > 0:
+            f1_score = (2 * precision * recall) / (precision + recall)
+        else:
+            f1_score = 0.0
+
+        return mAP, ap_per_thr, tps_fps_per_thr, f1_score
+    
     @torch.no_grad()    
     def _compute_metrics(
             self,
             semantic_output: SparseTensor,
             semantic_labels: SparseTensor,
             instance_output: SparseTensor,
-            instance_labels: Tensor,
+            instance_labels: SparseTensor,
         ) -> Dict:
 
         iou_semantic = self._metric_semantic_iou(semantic_output.F, semantic_labels.F)
@@ -294,22 +367,9 @@ class TreeProjectorTrainer:
         precision_semantic = self._metric_semantic_precision(semantic_output.F, semantic_labels.F)
         recall_semantic = self._metric_semantic_recall(semantic_output.F, semantic_labels.F)
         f1_semantic = self._metric_semantic_f1(semantic_output.F, semantic_labels.F)
+
+        mAP, ap_per_thr, tps_fps_per_thr, f1_instance = self._compute_instance_ap(instance_output, instance_labels)
         
-        '''
-        num_instances = instance_output.F.size(1)
-        if num_instances == 1:
-            miou_instance = torch.tensor([1.0], dtype=iou_semantic.dtype, device=iou_semantic.device)
-        else:
-            metric_miou_instance = MulticlassJaccardIndex(num_classes=num_instances).to(instance_output.F.device)
-            miou_instance = metric_miou_instance(instance_output.F, instance_labels)
-        '''
-
-        '''
-        num_instances = instance_labels.max() + 1
-        metric_miou_instance = MulticlassJaccardIndex(num_classes=num_instances, average='none').to(instance_output.F.device)
-        iou_instance = metric_miou_instance(instance_output.F, instance_labels)
-        '''
-
         return {
             'iou_semantic': iou_semantic.cpu().numpy(),
             'mean_iou_semantic': iou_semantic.mean(dim=0).item(),
@@ -319,7 +379,10 @@ class TreeProjectorTrainer:
             'mean_recall_semantic': recall_semantic.mean(dim=0).item(),
             'f1_semantic': f1_semantic.cpu().numpy(),
             'mean_f1_semantic': f1_semantic.mean(dim=0).item(),
-            # 'iou_instance': iou_instance.cpu().numpy()
+            'tps_fps_per_thrs_instance': tps_fps_per_thr,
+            'ap_per_thrs_instance': ap_per_thr,
+            'mAP_instance': mAP,
+            'f1_score_instance': f1_instance
         }
     
     def train(self) -> None:
@@ -380,7 +443,7 @@ class TreeProjectorTrainer:
                     )
 
                 with torch.no_grad():
-                    stat = self._compute_metrics(semantic_output, semantic_labels, None, None)
+                    stat = self._compute_metrics(semantic_output, semantic_labels, instance_output, instance_labels)
                     stats.append(stat)
                     losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_offset.item(), loss_inst.item()))
                     instance_output_labels = torch.argmax(instance_output.F, dim=1)
@@ -389,8 +452,8 @@ class TreeProjectorTrainer:
                         'Sem mIoU': f'{stat["mean_iou_semantic"]:.4f}',
                         'centroid loss': f'{loss_centroid.item():.4f}',
                         'offset loss': f'{loss_offset.item():.4f}',
-                        # 'Inst mIoU': f'{stat["mean_iou_instance"]:.4f}',
                         'Inst loss': f'{loss_inst.item():.4f}',
+                        'Inst F1': f'{stat["f1_score_instance"]:.4f}',
                         'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                     })
 
@@ -450,7 +513,7 @@ class TreeProjectorTrainer:
     
                 with amp.autocast(enabled=True):
                     semantic_output, centroid_score_output, offset_output, centroid_confidence_output, instance_output = self._model(inputs)
-                    instance_labels_remap = self._apply_hungarian(instance_output, instance_labels)
+                    # instance_labels_remap = self._apply_hungarian(instance_output, instance_labels)
 
                     loss, loss_sem, loss_centroid, loss_offset, loss_inst = self._compute_loss(
                         semantic_output=semantic_output,
@@ -460,10 +523,10 @@ class TreeProjectorTrainer:
                         offset_output=offset_output,
                         offset_labels=offset_labels,
                         instance_output=instance_output,
-                        instance_labels=instance_labels_remap
+                        instance_labels=instance_labels
                     )
 
-                stat = self._compute_metrics(semantic_output, semantic_labels, instance_output, instance_labels_remap)
+                stat = self._compute_metrics(semantic_output, semantic_labels, instance_output, instance_labels)
                 losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_offset.item(), loss_inst.item()))
                 stats.append(stat)
 
@@ -479,8 +542,8 @@ class TreeProjectorTrainer:
                     'Sem mIoU': f'{stat["mean_iou_semantic"]:.4f}',
                     'centroid loss': f'{loss_centroid.item():.4f}',
                     'offset loss': f'{loss_offset.item():.4f}',
-                    'Inst mIoU': f'{stat["mean_iou_instance"]:.4f}',
-                    'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels_remap))}',
+                    'Inst F1': f'{stat["f1_score_instance"]:.4f}',
+                    'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels))}',
                     'centroids found': f'{instance_output.F.size(1)} ({len(np.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                 })
 
