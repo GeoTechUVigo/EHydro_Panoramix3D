@@ -1,7 +1,7 @@
 from typing import Tuple, List, Union
 
 from ..modules import VoxelDecoder, CentroidHead, OffsetHead, InstanceHead
-from torch import nn
+from torch import nn, cat
 from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.resnet import SparseResNet
 from torchsparse.backbones.modules import SparseConvBlock
@@ -42,6 +42,7 @@ class TreeProjector(nn.Module):
         semantic_output = self.semantic_head(feats)
         centroid_score_output = self.centroid_head(feats, semantic_output)
         offset_output = self.offset_head(feats)
+        feats.F = cat([feats.F, feats.C[:, 1:] + offset_output.F], dim=1)
 
         # if centroid_score_labels is None or offset_labels is None:
         refined_centroid_scores, centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_output, offset_output)

@@ -111,7 +111,13 @@ class Dataset:
         offsets = centroids_per_point - voxels
         offsets[semantic_labels == 0] = 0
 
-        return offsets
+        # xy = voxels[:, :2]
+        # x_min, y_min = xy.min(axis=0)
+        # x_max, y_max = xy.max(axis=0)
+
+        # diag = np.sqrt((x_max - x_min) ** 2 + (y_max - y_min) ** 2)
+
+        return offsets  # / diag
     
     def _get_centroid_scores(self, voxels: np.ndarray, instance_labels: np.ndarray) -> np.ndarray:
         heat_map = np.zeros((len(voxels), 1), dtype=np.float32)

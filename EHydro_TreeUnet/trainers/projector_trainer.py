@@ -272,11 +272,11 @@ class TreeProjectorTrainer:
             pred_masks = pred_masks[:, pred_keep]
             probs = probs[:, pred_keep]
         else:
-            return 0.0, torch.zeros_like(iou_thresholds), {"thr": 0.5,
+            return 0.0, torch.zeros_like(iou_thresholds), [{"thr": 0.5,
                 "tp": 0,
                 "fp": 0,
                 "fn": num_gt
-            }, 0.0
+            }], 0.0
 
         K_eff = pred_masks.shape[1]
         pred_masks_f = pred_masks.float()
@@ -304,7 +304,7 @@ class TreeProjectorTrainer:
             fp = torch.zeros(K_eff, dtype=torch.int32, device=device)
 
             for p in range(K_eff):
-                ious = iou_mat[p]  # (G,)
+                ious = iou_mat[p]
                 best_iou, best_g = torch.max(ious, dim=0)
                 if best_iou >= thr and not gt_taken[best_g]:
                     tp[p] = 1
@@ -342,10 +342,9 @@ class TreeProjectorTrainer:
         fp = tps_fps_per_thr[0]['fp']
         fn = tps_fps_per_thr[0]['fn']
 
-        precision = tp / (tp + fp)
-        recall = tp / (tp + fn)
-
-        if precision > 0 and recall > 0:
+        if tp > 0:
+            precision = tp / (tp + fp)
+            recall = tp / (tp + fn)
             f1_score = (2 * precision * recall) / (precision + recall)
         else:
             f1_score = 0.0
@@ -367,7 +366,7 @@ class TreeProjectorTrainer:
         recall_semantic = self._metric_semantic_recall(semantic_output.F, semantic_labels.F)
         f1_semantic = self._metric_semantic_f1(semantic_output.F, semantic_labels.F)
 
-        mAP, ap_per_thr, tps_fps_per_thr, f1_instance = self._compute_instance_ap(instance_output, instance_labels)
+        mAP, ap_per_thr, tps_fps_per_thr, f1_instance = self._compute_instance_ap(instance_output, instance_labels, prob_threshold=0.0)
         
         return {
             'iou_semantic': iou_semantic.cpu().numpy(),
@@ -452,6 +451,7 @@ class TreeProjectorTrainer:
                         'centroid loss': f'{loss_centroid.item():.4f}',
                         'offset loss': f'{loss_offset.item():.4f}',
                         'Inst loss': f'{loss_inst.item():.4f}',
+                        'TP': f'{stat["tps_fps_per_thrs_instance"][0]["tp"]}',
                         'Inst F1': f'{stat["f1_score_instance"]:.4f}',
                         'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                     })
@@ -542,7 +542,6 @@ class TreeProjectorTrainer:
                     'centroid loss': f'{loss_centroid.item():.4f}',
                     'offset loss': f'{loss_offset.item():.4f}',
                     'Inst F1': f'{stat["f1_score_instance"]:.4f}',
-                    'centroids found': f'({len(np.unique(instance_output))}) / {len(torch.unique(instance_labels))}',
                     'centroids found': f'{instance_output.F.size(1)} ({len(np.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                 })
 

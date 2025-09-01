@@ -19,7 +19,7 @@ class InstanceHead(nn.Module):
         # self.voxel_descriptor = SparseConvBlock(in_channels=latent_dim, out_channels=descriptor_dim, kernel_size=1)
         self.background_descriptor = nn.Parameter(torch.empty(1, descriptor_dim), requires_grad=True)
         self.voxel_descriptor = nn.Sequential(
-            spnn.Conv3d(latent_dim, descriptor_dim, 1),
+            spnn.Conv3d(latent_dim + 3, descriptor_dim, 1),
             spnn.ReLU(True),
             # spnn.Conv3d(latent_dim // 2, descriptor_dim, 1),
             # spnn.ReLU(True),
@@ -59,9 +59,14 @@ class InstanceHead(nn.Module):
 
     @torch.no_grad()
     def _revoxelize(self, voxel_feats: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
+        #xy = voxel_feats.C[:, 1:3]
+        #min, _ = xy.min(axis=0)
+        #max, _ = xy.max(axis=0)
+        #diag = torch.sqrt((max[0] - min[0]) ** 2 + (max[1] - min[1]) ** 2)
+
         offsets_ = torch.cat([
             torch.zeros(voxel_feats.F.size(0), 1, device=offsets.F.device, dtype=torch.int32),
-            offsets.F.to(torch.int32)
+            (offsets.F).to(torch.int32)
         ], dim=1)
 
         new_coords = voxel_feats.C + offsets_
@@ -104,7 +109,7 @@ class InstanceHead(nn.Module):
 
         hmax = self.max_pool(centroid_scores_spconv)
 
-        peak_mask = (hmax.features[:, 0] == centroid_scores_spconv.features[:, 0])
+        peak_mask = (hmax.features[:, 0] == centroid_scores_spconv.features[:, 0]) & (centroid_scores_spconv.features[:, 0] > 0.2)
         if peak_mask.sum() == 0:
             empty_coords = cluster_feats.C.new_empty(0, cluster_feats.C.size(1))
             return SparseTensor(coords=empty_coords, feats=cluster_feats.F.new_empty(0, cluster_feats.F.size(1))), SparseTensor(coords=empty_coords, feats=cluster_feats.F.new_empty(0, 1))
