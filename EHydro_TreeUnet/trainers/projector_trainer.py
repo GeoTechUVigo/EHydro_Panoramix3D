@@ -61,7 +61,8 @@ class TreeProjectorTrainer:
             ],
             latent_dim: int = 256,
             instance_density: float = 0.01,
-            centroid_thres: float = 0.1,
+            score_thres: float = 0.1,
+            centroid_thres: float = 0.2,
             descriptor_dim: int = 16
         ):
 
@@ -135,6 +136,7 @@ class TreeProjectorTrainer:
             resnet_blocks=resnet_blocks,
             latent_dim=latent_dim,
             instance_density=instance_density,
+            score_thres=score_thres,
             centroid_thres=centroid_thres,
             descriptor_dim=descriptor_dim
         )

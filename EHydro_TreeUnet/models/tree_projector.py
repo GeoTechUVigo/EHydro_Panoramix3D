@@ -21,7 +21,8 @@ class TreeProjector(nn.Module):
             ],
             latent_dim = 512,
             instance_density = 0.01,
-            centroid_thres = 0.1,
+            score_thres = 0.1,
+            centroid_thres = 0.2,
             descriptor_dim = 16
         ):
 
@@ -29,25 +30,19 @@ class TreeProjector(nn.Module):
         
         self.encoder = SparseResNet(blocks=resnet_blocks,in_channels=in_channels)
         self.voxel_decoder = VoxelDecoder(resnet_blocks, latent_dim)
-        self.semantic_head = nn.Sequential(
-            SparseConvBlock(latent_dim, num_classes, 1),
-            # SparseConvBlock(latent_dim // 2, num_classes, 3)
-        )
-        self.centroid_head = CentroidHead(latent_dim)
+        self.semantic_head = SparseConvBlock(latent_dim, num_classes, 1)
+        self.centroid_head = CentroidHead(latent_dim, instance_density=instance_density, score_thres=score_thres, centroid_thres=centroid_thres)
         self.offset_head = OffsetHead(latent_dim)
-        self.instance_head = InstanceHead(latent_dim, descriptor_dim, tau=centroid_thres, instance_density=instance_density)
+        self.instance_head = InstanceHead(latent_dim, descriptor_dim)
 
-    def forward(self, x: SparseTensor, centroid_score_labels: SparseTensor = None, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
+    def forward(self, x: SparseTensor) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
         feats = self.voxel_decoder(self.encoder(x))
         semantic_output = self.semantic_head(feats)
-        centroid_score_output = self.centroid_head(feats, semantic_output)
-        offset_output = self.offset_head(feats)
-        feats.F = cat([feats.F, feats.C[:, 1:] + offset_output.F], dim=1)
 
-        # if centroid_score_labels is None or offset_labels is None:
-        refined_centroid_scores, centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_output, offset_output)
-        # else:
-        #     refined_centroid_scores, centroid_confidence_output, instance_output = self.instance_head(feats, centroid_score_labels, offset_labels)
+        offsets, cluster_feats, inv_map = self.offset_head(feats)
+        centroid_scores, centroid_feats, centroid_confidences = self.centroid_head(feats, cluster_feats, inv_map)
+        instance_output = self.instance_head(cluster_feats, centroid_feats, centroid_confidences)
+        instance_output.F = instance_output.F.index_select(0, inv_map)
 
-        return semantic_output, refined_centroid_scores, offset_output, centroid_confidence_output, instance_output
+        return semantic_output, centroid_scores, offsets, centroid_confidences, instance_output
     

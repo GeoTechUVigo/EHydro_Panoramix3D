@@ -38,7 +38,8 @@ RESNET_BLOCKS = [
 ]
 LATENT_DIM = 512
 INSTANCE_DENSITY = 0.01
-CENTROID_THRES = 0.1
+SCORE_THRES = 0.1
+CENTROID_THRES = 0.2
 DESCRIPTOR_DIM = 64
 
 
@@ -69,6 +70,7 @@ def main():
         resnet_blocks=RESNET_BLOCKS,
         latent_dim=LATENT_DIM,
         instance_density=INSTANCE_DENSITY,
+        score_thres=SCORE_THRES,
         centroid_thres=CENTROID_THRES,
         descriptor_dim=DESCRIPTOR_DIM
     )
