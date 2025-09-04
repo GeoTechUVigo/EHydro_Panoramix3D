@@ -59,11 +59,6 @@ class InstanceHead(nn.Module):
 
     @torch.no_grad()
     def _revoxelize(self, voxel_feats: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
-        #xy = voxel_feats.C[:, 1:3]
-        #min, _ = xy.min(axis=0)
-        #max, _ = xy.max(axis=0)
-        #diag = torch.sqrt((max[0] - min[0]) ** 2 + (max[1] - min[1]) ** 2)
-
         offsets_ = torch.cat([
             torch.zeros(voxel_feats.F.size(0), 1, device=offsets.F.device, dtype=torch.int32),
             (offsets.F).to(torch.int32)
@@ -91,7 +86,7 @@ class InstanceHead(nn.Module):
         out_feats = out_feats.features.index_select(0, idx_query_long)
         out_scores = counts.to(out_feats.dtype)
 
-        return SparseTensor(coords=voxel_feats.C, feats=out_feats), SparseTensor(coords=voxel_feats.C, feats=out_scores)
+        return SparseTensor(coords=voxel_feats.C, feats=out_feats), SparseTensor(coords=voxel_feats.C, feats=out_scores), idx_query_long
 
     @torch.no_grad()
     def _find_centroid_peaks(self, cluster_feats: SparseTensor, centroid_scores: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
@@ -127,9 +122,8 @@ class InstanceHead(nn.Module):
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
     def forward(self, voxel_feats: SparseTensor, centroid_scores: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor, SparseTensor]:
-        voxel_descriptors = self.voxel_descriptor(voxel_feats)
-
-        cluster_feats, cluster_scores = self._revoxelize(voxel_feats, offsets)
+        cluster_feats, cluster_scores, inv_map = self._revoxelize(voxel_feats, offsets)
+        voxel_descriptors = self.voxel_descriptor(cluster_feats)
         refined_centroid_scores = self.mixer(self._union_sparse_layers(centroid_scores, cluster_scores))
         refined_centroid_scores.F = self.act(refined_centroid_scores.F)
 
@@ -140,5 +134,6 @@ class InstanceHead(nn.Module):
             centroid_descriptors = cat([self.background_descriptor, centroid_confidences.F * self.voxel_descriptor(centroid_feats).F], dim=0)
 
         instance_output = voxel_descriptors.F @ centroid_descriptors.T
+        instance_output = instance_output.index_select(0, inv_map)
 
         return refined_centroid_scores, centroid_confidences, SparseTensor(coords=voxel_feats.C, feats=instance_output)

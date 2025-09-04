@@ -200,7 +200,7 @@ class InstanceVariableKLoss(nn.Module):
                 lbce = self.focal_loss_binary(pk_logits, gj, alpha=self.focal_alpha, gamma=self.focal_gamma, reduction='mean')
             else:
                 lbce = self._bce_criterion(pk_logits, gj)
-            loss_mask_terms.append((self.dice_w * ldice + self.bce_w * lbce) / M)
+            loss_mask_terms.append(self.dice_w * ldice + self.bce_w * lbce)
 
         loss_mask = torch.stack(loss_mask_terms).mean() if len(loss_mask_terms) > 0 else torch.tensor(0.0, device=logits.device)
 
@@ -223,10 +223,10 @@ class InstanceVariableKLoss(nn.Module):
         loss_count = (M_pred_soft - M_gt).pow(2)
 
         loss_total = (
-            loss_mask
+            loss_mask / M
             + self.bg_w * loss_bg
-            + self.ghost_w * loss_ghost
-            + self.count_w * loss_count
+            + (self.ghost_w * loss_ghost) / M
+            + (self.count_w * loss_count) / M
         )
 
         stats = {
