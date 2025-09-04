@@ -266,6 +266,11 @@ class TreeProjectorTrainer:
         C = max(C_pred, instance_count)
         if C_pred == 0 or instance_count == 0:
             return 0, float('nan')
+        
+        if C < 2:
+            pad = torch.full((logits.size(0), 1), float('-inf'), device=device, dtype=logits.dtype)
+            logits = torch.cat([logits, pad], dim=1)
+            C = 2
 
         preds = instance_output.F.argmax(dim=1)
         metric = MulticlassJaccardIndex(
