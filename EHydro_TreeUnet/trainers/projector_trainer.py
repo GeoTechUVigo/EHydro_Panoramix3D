@@ -446,14 +446,14 @@ class TreeProjectorTrainer:
                     losses.append((loss.item(), loss_sem.item(), loss_centroid.item(), loss_offset.item(), loss_inst.item()))
                     instance_output_labels = torch.argmax(instance_output.F, dim=1)
                     pbar.set_postfix({
-                        'loss': f'{loss.item():.4f}',
-                        'Sem mIoU': f'{stat["mean_iou_semantic"]:.4f}',
-                        'centroid loss': f'{loss_centroid.item():.4f}',
-                        'offset loss': f'{loss_offset.item():.4f}',
-                        'Inst loss': f'{loss_inst.item():.4f}',
+                        'L': f'{loss.item():.4f}',
+                        'IoU_s': f'{stat["mean_iou_semantic"]:.4f}',
+                        'L_c': f'{loss_centroid.item():.4f}',
+                        'L_o': f'{loss_offset.item():.4f}',
+                        'L_i': f'{loss_inst.item():.4f}',
                         'TP': f'{stat["tps_fps_per_thrs_instance"][0]["tp"]}',
-                        'Inst F1': f'{stat["f1_score_instance"]:.4f}',
-                        'centroids found': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
+                        'F1_i': f'{stat["f1_score_instance"]:.4f}',
+                        'C': f'{instance_output.F.size(1)} ({len(torch.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                     })
 
                 scaler.scale(loss).backward()
@@ -537,12 +537,14 @@ class TreeProjectorTrainer:
                 instance_output_labels = torch.argmax(instance_output.F, dim=1).cpu().numpy()
 
                 pbar.set_postfix({
-                    'loss': f'{loss.item():.4f}',
-                    'Sem mIoU': f'{stat["mean_iou_semantic"]:.4f}',
-                    'centroid loss': f'{loss_centroid.item():.4f}',
-                    'offset loss': f'{loss_offset.item():.4f}',
-                    'Inst F1': f'{stat["f1_score_instance"]:.4f}',
-                    'centroids found': f'{instance_output.F.size(1)} ({len(np.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
+                    'L': f'{loss.item():.4f}',
+                    'IoU_s': f'{stat["mean_iou_semantic"]:.4f}',
+                    'L_c': f'{loss_centroid.item():.4f}',
+                    'L_o': f'{loss_offset.item():.4f}',
+                    'L_i': f'{loss_inst.item():.4f}',
+                    'TP': f'{stat["tps_fps_per_thrs_instance"][0]["tp"]}',
+                    'F1_i': f'{stat["f1_score_instance"]:.4f}',
+                    'C': f'{instance_output.F.size(1)} ({len(np.unique(instance_output_labels))}) / {len(torch.unique(instance_labels.F))}'
                 })
 
                 yield voxels, semantic_output, semantic_labels_cpu, centroid_score_output, centroid_score_labels_cpu, offset_output, offset_labels_cpu, instance_output_labels, instance_labels_cpu, centroid_voxels, centroid_confidence_output
