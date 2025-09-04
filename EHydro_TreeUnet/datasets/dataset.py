@@ -96,20 +96,20 @@ class Dataset:
         return (coords @ rotation_mtx.T) * scale
     
     def _get_instance_offsets(self, voxels: np.ndarray, semantic_labels: np.ndarray, instance_labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        unique_labels, inverse_indices = np.unique(instance_labels, return_inverse=True)
-        n_instances = len(unique_labels)
+        offsets = np.zeros((len(voxels), 3), dtype=np.float32)
+        for instance_id in np.unique(instance_labels):
+            if instance_id == 0:
+                continue
 
-        sums = np.zeros((n_instances, 3), dtype=np.float64)
-        counts = np.zeros(n_instances, dtype=np.int64)
+            idx = np.where(instance_labels == instance_id)[0]
+            pts = voxels[idx]
 
-        np.add.at(sums, inverse_indices, voxels)
-        np.add.at(counts, inverse_indices, 1)
+            ctr = pts.mean(axis=0)
+            d2 = np.sum((pts - ctr) ** 2, axis=1)
+            ctr_idx = np.argmin(d2)
+            ctr_voxel = pts[ctr_idx]
 
-        centroids = sums / counts[:, None]
-        centroids_per_point = centroids[inverse_indices]
-
-        offsets = centroids_per_point - voxels
-        offsets[semantic_labels == 0] = 0
+            offsets[idx, :] = ctr_voxel - pts
 
         # xy = voxels[:, :2]
         # x_min, y_min = xy.min(axis=0)

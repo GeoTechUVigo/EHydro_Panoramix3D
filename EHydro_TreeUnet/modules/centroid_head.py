@@ -66,9 +66,10 @@ class CentroidHead(nn.Module):
 
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
-    def forward(self, voxel_feats: SparseTensor, cluster_feats: SparseTensor, inv_map: Tensor) -> SparseTensor:
+    def forward(self, voxel_feats: SparseTensor, cluster_feats: SparseTensor, inv_map: Tensor, centroid_score_labels: SparseTensor = None) -> SparseTensor:
         centroid_scores = self.conv(voxel_feats)
         centroid_scores.F = self.act(centroid_scores.F)
-        centroid_feats, centroid_confidences = self._find_centroid_peaks(cluster_feats, centroid_scores, inv_map)
+
+        centroid_feats, centroid_confidences = self._find_centroid_peaks(cluster_feats, centroid_scores if centroid_score_labels is None else centroid_score_labels, inv_map)
 
         return centroid_scores, centroid_feats, centroid_confidences

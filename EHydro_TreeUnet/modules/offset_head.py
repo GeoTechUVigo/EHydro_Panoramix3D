@@ -13,11 +13,11 @@ class OffsetHead(nn.Module):
         super().__init__()
         self.conv = spnn.Conv3d(latent_dim, 3, 1, bias=True)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def _revoxelize(self, voxel_feats: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         offsets_ = torch.cat([
             torch.zeros(voxel_feats.F.size(0), 1, device=offsets.F.device, dtype=torch.int32),
-            (offsets.F).to(torch.int32)
+            offsets.F.to(torch.int32)
         ], dim=1)
 
         new_coords = voxel_feats.C + offsets_
@@ -33,7 +33,7 @@ class OffsetHead(nn.Module):
 
         return SparseTensor(coords=out_coords, feats=out_feats), idx_query_long
 
-    def forward(self, feats: SparseTensor) -> SparseTensor:
+    def forward(self, feats: SparseTensor, offset_labels: SparseTensor = None) -> SparseTensor:
         offsets = self.conv(feats)
-        cluster_feats, inv_map = self._revoxelize(feats, offsets)
+        cluster_feats, inv_map = self._revoxelize(feats, offsets if offset_labels is None else offset_labels)
         return offsets, cluster_feats, inv_map
