@@ -482,10 +482,10 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'Version name: {self._version_name}')
             print(f'\n=== Starting epoch {epoch} ===')
-            if epoch < 3:
-                print('Training instance correlation with labels instead of predictions by now...\n')
-            else:
-                print('Training instance correlation with predictions.\n')
+            #if epoch < 3:
+            #    print('Training instance correlation with labels instead of predictions by now...\n')
+            #else:
+            #    print('Training instance correlation with predictions.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout)
             for feed_dict in pbar:
@@ -508,11 +508,10 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch < 0:
-                        semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
-                    else:
-                        semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, semantic_labels)
-
+                    #if epoch < 3:
+                    #    semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
+                    #else:
+                    semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, semantic_labels)
                     instance_labels_remap = self._apply_hungarian(instance_output, instance_labels)
 
                     loss, loss_sem, loss_centroid, loss_offset, loss_inst = self._compute_loss(
@@ -534,29 +533,6 @@ class TreeProjectorTrainer:
                         instance_output_labels = torch.argmax(instance_output.F, dim=1)
                     else:
                         instance_output_labels = instance_labels.F.new_empty((0,))
-
-                    '''
-                    semantic_output_labels = torch.argmax(semantic_output.F, dim=1)
-                    semantic_mask = semantic_output_labels != 0
-                    pcd = o3d.geometry.PointCloud()
-                    voxels = instance_output.C[:, 1:].cpu().numpy()
-                    unique_ids = torch.unique(instance_output_labels).cpu().numpy()
-                    rng = np.random.default_rng(0)
-                    palette = rng.random((len(unique_ids), 3))
-
-                    id2color = {uid: palette[i] for i, uid in enumerate(unique_ids)}
-                    colors = np.array([id2color[i] for i in instance_output_labels.cpu().numpy()], dtype=np.float64)
-
-                    pcd.points = o3d.utility.Vector3dVector(voxels)
-                    pcd.colors = o3d.utility.Vector3dVector(colors)
-                    o3d.visualization.draw_geometries([pcd])
-
-                    colors = np.array([id2color[i] for i in instance_labels_remap.cpu().numpy()], dtype=np.float64)
-
-                    pcd.points = o3d.utility.Vector3dVector(voxels)
-                    pcd.colors = o3d.utility.Vector3dVector(colors)
-                    o3d.visualization.draw_geometries([pcd])
-                    '''
 
                     pbar.set_postfix({
                         'L': f'{loss.item():.4f}',

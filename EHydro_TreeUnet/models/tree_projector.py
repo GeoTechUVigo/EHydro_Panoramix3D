@@ -70,8 +70,8 @@ class TreeProjector(nn.Module):
         ng_mask = (semantic_labels != 0)
         feats_ng, idx_ng = self._sparse_select(feats, ng_mask)
 
-        offsets, cluster_feats, inv_map = self.offset_head(feats_ng, offset_labels)
-        centroid_scores, centroid_feats, centroid_confidences = self.centroid_head(feats_ng, cluster_feats, inv_map, centroid_score_labels)
+        offsets, cluster_feats, centroid_scores_off, inv_map = self.offset_head(feats_ng, offset_labels)
+        centroid_scores, centroid_feats, centroid_confidences = self.centroid_head(feats_ng, cluster_feats, centroid_scores_off, inv_map, centroid_score_labels)
 
         instance_output = self.instance_head(cluster_feats, centroid_feats, centroid_confidences)
         instance_output.C = feats_ng.C

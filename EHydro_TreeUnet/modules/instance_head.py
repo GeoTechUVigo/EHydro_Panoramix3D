@@ -29,8 +29,10 @@ class InstanceHead(nn.Module):
             return SparseTensor(coords=cluster_feats.C, feats=torch.empty(cluster_feats.F.size(0), 0, dtype=cluster_descriptors.F.dtype, device=cluster_feats.F.device))
         
         centroid_descriptors = self.voxel_descriptor(centroid_feats)
-        centroid_descriptors.F = centroid_confidences.F * F.normalize(centroid_descriptors.F, p=2, dim=1)
-
-        instance_output = cluster_descriptors.F @ centroid_descriptors.F.T
+        # centroid_descriptors.F = centroid_confidences.F * F.normalize(centroid_descriptors.F, p=2, dim=1)
+        centroid_descriptors.F = centroid_confidences.F * centroid_descriptors.F
+        descriptor_distances = cluster_descriptors.C[:, 1:][:, None, :] - centroid_descriptors.C[:, 1:][None, :, :]
+        descriptor_distances = torch.clamp(torch.sum(descriptor_distances ** 2, dim=-1), min=1e-6)
+        instance_output = (cluster_descriptors.F @ centroid_descriptors.F.T) / descriptor_distances
 
         return SparseTensor(coords=cluster_feats.C, feats=instance_output)

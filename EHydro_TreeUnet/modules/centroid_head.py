@@ -1,5 +1,6 @@
 import math
 import torch
+import torchsparse.nn.functional as spf
 
 from typing import Tuple
 
@@ -13,19 +14,44 @@ from spconv.pytorch.pool import SparseMaxPool, SparseAvgPool
 class CentroidHead(nn.Module):
     def __init__(self, latent_dim: int, instance_density: float = 0.01, score_thres: float = 0.1, centroid_thres: float = 0.2):
         super().__init__()
-        self.conv = spnn.Conv3d(latent_dim, 1, 1, bias=True)
+        # self.conv = spnn.Conv3d(latent_dim, 1, 1, bias=True)
+        self.conv = nn.Sequential(
+            SparseConvBlock(latent_dim, latent_dim // 2, 3),
+            SparseConvBlock(latent_dim // 2, 1, 1),
+            #spnn.Conv3d(latent_dim // 2, 1, 1, bias=True)
+        )
+
+        self.mixer = spnn.Conv3d(2, 1, 3, bias=True)
+
         self.act = nn.Sigmoid()
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
         self.avg_pool = SparseAvgPool(3, kernel_size=3, stride=1, padding=1, subm=True)
 
-        nn.init.constant_(self.conv.bias, val = math.log(instance_density / (1 - instance_density)))
+        nn.init.constant_(self.mixer.bias, val = math.log(instance_density / (1 - instance_density)))
         #nn.init.constant_(self.conv[2].bias, val = math.log(instance_density / (1 - instance_density)))
         #nn.init.kaiming_normal_(self.conv[0][0].kernel, mode='fan_out')
 
         self._score_threshold = score_thres
         self._centroid_threshold = centroid_thres
+
+    def _union_sparse_layers(self, A: SparseTensor, B: SparseTensor) -> SparseTensor:
+        hashA = spf.sphash(A.C)
+        hashB = spf.sphash(B.C)
+
+        idxB_to_A = spf.sphashquery(hashB, hashA)
+        outB = torch.zeros(A.C.size(0), B.F.size(1), device=A.C.device, dtype=B.F.dtype)
+
+        mask = idxB_to_A >= 0
+        if mask.any():
+            rowsA = idxB_to_A[mask].to(torch.long)
+            rowsB = torch.nonzero(mask, as_tuple=False).squeeze(1)
+            outB.index_copy_(0, rowsA, B.F[rowsB])
+
+        out_feats = torch.cat([A.F, outB.to(A.F.dtype)], dim=1)
+
+        return SparseTensor(coords=A.C, feats=out_feats)
     
-    @torch.no_grad()
+    # @torch.no_grad()
     def _find_centroid_peaks(self, cluster_feats: SparseTensor, centroid_scores: SparseTensor, inv_map: Tensor) -> Tuple[SparseTensor, SparseTensor]:
         mask = (centroid_scores.F > self._score_threshold).squeeze(1)
         if mask.sum() == 0:
@@ -66,8 +92,9 @@ class CentroidHead(nn.Module):
 
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
-    def forward(self, voxel_feats: SparseTensor, cluster_feats: SparseTensor, inv_map: Tensor, centroid_score_labels: SparseTensor = None) -> SparseTensor:
-        centroid_scores = self.conv(voxel_feats)
+    def forward(self, voxel_feats: SparseTensor, cluster_feats: SparseTensor, centroid_scores_off: SparseTensor, inv_map: Tensor, centroid_score_labels: SparseTensor = None) -> SparseTensor:
+        centroid_scores = self._union_sparse_layers(self.conv(voxel_feats), centroid_scores_off)
+        centroid_scores = self.mixer(centroid_scores)
         centroid_scores.F = self.act(centroid_scores.F)
 
         centroid_feats, centroid_confidences = self._find_centroid_peaks(cluster_feats, centroid_scores if centroid_score_labels is None else centroid_score_labels, inv_map)
