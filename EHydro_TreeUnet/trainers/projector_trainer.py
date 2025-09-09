@@ -242,7 +242,7 @@ class TreeProjectorTrainer:
         loss_offset = self._criterion_offset(offset_output.F, offset_labels.F)
         
         if instance_output.F.size(1) == 0:
-            loss_inst = loss_sem.new_zeros(1)
+            loss_inst = loss_sem.new_full((1,), fill_value=1000.0)
         else:
             loss_inst = self._criterion_instance(instance_output.F, instance_labels)
 
