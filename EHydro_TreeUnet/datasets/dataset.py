@@ -151,6 +151,9 @@ class Dataset:
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
         instance_labels = instance_labels[indices]
+        
+        _, instance_labels = np.unique(instance_labels, return_inverse=True)
+
         centroid_score_labels = self._get_centroid_scores(voxels, instance_labels)
         offset_labels = self._get_instance_offsets(voxels, semantic_labels, instance_labels)
 

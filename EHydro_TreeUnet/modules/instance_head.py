@@ -21,7 +21,7 @@ class InstanceHead(nn.Module):
         )
 
 
-    def forward(self, cluster_feats: SparseTensor, centroid_feats: SparseTensor, centroid_confidences: SparseTensor) -> Tuple[SparseTensor, SparseTensor, SparseTensor]:
+    def forward(self, cluster_feats: SparseTensor, centroid_feats: SparseTensor, centroid_confidences: SparseTensor) -> SparseTensor:
         cluster_descriptors = self.voxel_descriptor(cluster_feats)
         cluster_descriptors.F = F.normalize(cluster_descriptors.F, p=2, dim=1)
 
@@ -29,10 +29,29 @@ class InstanceHead(nn.Module):
             return SparseTensor(coords=cluster_feats.C, feats=torch.empty(cluster_feats.F.size(0), 0, dtype=cluster_descriptors.F.dtype, device=cluster_feats.F.device))
         
         centroid_descriptors = self.voxel_descriptor(centroid_feats)
-        # centroid_descriptors.F = centroid_confidences.F * F.normalize(centroid_descriptors.F, p=2, dim=1)
         centroid_descriptors.F = centroid_confidences.F * centroid_descriptors.F
-        descriptor_distances = cluster_descriptors.C[:, 1:][:, None, :] - centroid_descriptors.C[:, 1:][None, :, :]
-        descriptor_distances = torch.clamp(torch.sum(descriptor_distances ** 2, dim=-1), min=1e-6)
-        instance_output = (cluster_descriptors.F @ centroid_descriptors.F.T) / descriptor_distances
 
-        return SparseTensor(coords=cluster_feats.C, feats=instance_output)
+        batch_indices = torch.unique(centroid_feats.C[:, 0])
+        output_features = torch.zeros(cluster_feats.F.size(0), centroid_feats.F.size(0), 
+                                    dtype=cluster_descriptors.F.dtype, 
+                                    device=cluster_descriptors.F.device)
+
+        centroid_offset = 0
+        for batch_idx in batch_indices:
+            cluster_mask = cluster_feats.C[:, 0] == batch_idx
+            centroid_mask = centroid_feats.C[:, 0] == batch_idx
+
+            if not centroid_mask.any():
+                continue
+
+            batch_dists = (cluster_feats.C[cluster_mask, 1:][:, None, :] - centroid_feats.C[centroid_mask, 1:][None, :, :]).to(cluster_descriptors.F.dtype)
+            batch_dists = torch.norm(batch_dists, p=2, dim=-1).clamp(min=0.1)
+            attention_weights = F.softmax(-batch_dists, dim=-1)
+            
+            batch_centroid_descriptors = centroid_descriptors.F[centroid_mask]
+            batch_output = (cluster_descriptors.F[cluster_mask] @ batch_centroid_descriptors.T) * attention_weights
+
+            output_features[cluster_mask, centroid_offset:centroid_offset + batch_centroid_descriptors.size(0)] = batch_output
+            centroid_offset += batch_centroid_descriptors.size(0)
+
+        return SparseTensor(coords=cluster_feats.C, feats=output_features)
