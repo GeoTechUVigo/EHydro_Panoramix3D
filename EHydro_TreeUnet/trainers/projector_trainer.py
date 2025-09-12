@@ -56,6 +56,7 @@ class TreeProjectorTrainer:
             centroid_loss_coef: float = 1.0,
             offset_loss_coef: float = 1.0,
             instance_loss_coef: float = 1.0,
+            lr: float = 1e-3,
 
             resnet_blocks: List[Tuple[int, int, Union[int, Tuple[int, int, int]], Union[int, Tuple[int, int, int]]]] = [
                 (3, 16, 3, 1),
@@ -116,6 +117,7 @@ class TreeProjectorTrainer:
         self._centroid_loss_coef = centroid_loss_coef
         self._offset_loss_coef = offset_loss_coef
         self._instance_loss_coef = instance_loss_coef
+        self._lr = lr
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
@@ -359,7 +361,7 @@ class TreeProjectorTrainer:
         return slope
 
     def train(self) -> None:
-        optimizer = torch.optim.Adam(self._model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
         scaler = amp.GradScaler(enabled=True)
         start_epoch = 0
         
