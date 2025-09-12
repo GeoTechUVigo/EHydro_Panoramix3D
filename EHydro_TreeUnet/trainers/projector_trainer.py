@@ -240,15 +240,13 @@ class TreeProjectorTrainer:
             instance_labels: SparseTensor
         ) -> Tensor:
         
-        loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F)
-        loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F)
-        loss_offset = self._criterion_offset(offset_output.F, offset_labels.F)
+        loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F) * self._semantic_loss_coef
+        loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F) * self._centroid_loss_coef
+        loss_offset = self._criterion_offset(offset_output.F, offset_labels.F) * self._offset_loss_coef
         loss_inst, remap_info = self._criterion_instance(instance_output.F, instance_labels.F)
+        loss_inst = loss_inst * self._instance_loss_coef
 
-        total_loss = self._semantic_loss_coef * loss_sem + \
-                    self._centroid_loss_coef * loss_centroid + \
-                    self._offset_loss_coef * loss_offset + \
-                    self._instance_loss_coef * loss_inst
+        total_loss = loss_sem + loss_centroid + loss_offset + loss_inst
 
         return {
             'total_loss': total_loss,
