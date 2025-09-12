@@ -117,7 +117,7 @@ class Dataset:
 
         # diag = np.sqrt((x_max - x_min) ** 2 + (y_max - y_min) ** 2)
 
-        return offsets  # / diag
+        return np.sign(offsets) * np.log1p(np.abs(offsets))  # / diag
     
     def _get_centroid_scores(self, voxels: np.ndarray, instance_labels: np.ndarray) -> np.ndarray:
         heat_map = np.zeros((len(voxels), 1), dtype=np.float32)

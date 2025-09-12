@@ -302,8 +302,8 @@ class TreeProjectorTrainer:
         fp = remap_info['num_predictions'] - tp
         fn = remap_info['num_instances'] - tp
 
-        precision = tp / (tp + fp) if (tp + fp) > 0 else float('nan')
-        recall = tp / (tp + fn) if (tp + fn) > 0 else float('nan')
+        precision = tp / remap_info['num_predictions'] if remap_info['num_predictions'] > 0 else float('nan')
+        recall = tp / remap_info['num_instances'] if remap_info['num_instances'] > 0 else float('nan')
         f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else float('nan')
 
         return tp, fp, fn, precision, recall, f1_score

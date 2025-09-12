@@ -23,7 +23,7 @@ class OffsetHead(nn.Module):
     def _revoxelize(self, voxel_feats: SparseTensor, offsets: SparseTensor) -> Tuple[SparseTensor, SparseTensor]:
         offsets_ = torch.cat([
             torch.zeros(voxel_feats.F.size(0), 1, device=offsets.F.device, dtype=torch.int32),
-            offsets.F.to(torch.int32)
+            (offsets.F.sign() * offsets.F.abs().expm1()).to(torch.int32)
         ], dim=1)
 
         new_coords = voxel_feats.C + offsets_
