@@ -46,7 +46,7 @@ class CentroidHead(nn.Module):
         
         return SparseTensor(coords=A.C, feats=cat((A.F, outB.to(A.F.dtype)), dim=1))
     
-    @torch.no_grad()
+    # @torch.no_grad()
     def _find_centroid_peaks(self, cluster_feats: SparseTensor, centroid_scores: SparseTensor, inv_map: Tensor) -> Tuple[SparseTensor, SparseTensor]:
         mask = (centroid_scores.F > self._score_threshold).squeeze(1)
         if mask.sum() == 0:

@@ -455,7 +455,7 @@ class TreeProjectorTrainer:
 
                     pbar.set_postfix({
                         'VRAM': f'{torch.cuda.memory_reserved(self._device) / (1024 ** 3):.2f} GB',
-                        'TP': stat['tp'],
+                        'TP': f"{stat['tp']} / {stat['centroids_gt']}",
                         'Total': loss_trends['total_loss'],
                         'Semantic': loss_trends['semantic_loss'],
                         'Centroid': loss_trends['centroid_loss'],

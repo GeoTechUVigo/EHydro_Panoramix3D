@@ -44,27 +44,33 @@ class FocalLoss(nn.Module):
 
 
 class HungarianInstanceLoss(nn.Module):
-    def __init__(self, lambda_bce: float = 5.0, lambda_dice: float = 5.0, eps: float = 1e-3, normalize_by_num_gt: bool = True):
-        super().__init__()
-        self.lambda_bce = float(lambda_bce)
-        self.lambda_dice = float(lambda_dice)
-        self.eps = float(eps)
-        self.normalize_by_num_gt = bool(normalize_by_num_gt)
+    def __init__(self, lambda_focal: float = 1.0, lambda_dice: float = 1.0, alpha_focal: float = 0.25, gamma_focal: float = 2.0):
+        super(HungarianInstanceLoss, self).__init__()
 
-    def _bce_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
+        self._lambda_focal = lambda_focal
+        self._lambda_dice = lambda_dice
+
+        self._alpha_focal = alpha_focal
+        self._gamma_focal = gamma_focal
+    
+    def _focal_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
         N = logits.shape[0]
-        ls_pos = F.logsigmoid(logits)
-        ls_neg = F.logsigmoid(-logits)
-        denom = N + self.eps
-        cost = -((G / denom) @ ls_pos) - (((1.0 - G) / denom) @ ls_neg)
-        return cost
+        p = torch.sigmoid(logits)
+
+        log_p = F.logsigmoid(logits)
+        log_1mp = F.logsigmoid(-logits)
+
+        pos_term = -self._alpha_focal * ((1 - p) ** self._gamma_focal) * log_p
+        neg_term = -(1.0 - self._alpha_focal) * (p ** self._gamma_focal) * log_1mp
+
+        return (G / N) @ pos_term + ((1.0 - G) / N) @ neg_term
 
     def _dice_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
         p = torch.sigmoid(logits)
         inter = 2.0 * (G @ p)
         sum_p = p.sum(0, keepdim=True)
         sum_g = G.sum(1, keepdim=True)
-        return 1.0 - inter / (sum_p + sum_g + self.eps)
+        return 1.0 - inter / (sum_p + sum_g)
 
     def forward(self, pred_logits: torch.Tensor, gt_labels: torch.Tensor):
         pred_logits = pred_logits.clamp(min=-10.0, max=10.0)
@@ -81,10 +87,9 @@ class HungarianInstanceLoss(nn.Module):
             gt_masks = (labels.unsqueeze(0) == uniq.unsqueeze(1)).to(dtype=dtype)
 
         I = gt_masks.shape[0]
-
-        bce = self._bce_matrix(pred_logits, gt_masks)  # .nan_to_num(nan=1e6, posinf=1e6, neginf=-1e6)
-        dice = self._dice_matrix(pred_logits, gt_masks)  # .nan_to_num(nan=1e6, posinf=1e6, neginf=-1e6)
-        cost = bce + dice
+        focal = self._focal_matrix(pred_logits, gt_masks) * self._lambda_focal
+        dice = self._dice_matrix(pred_logits, gt_masks) * self._lambda_dice
+        cost = focal + dice
 
         if I == 0 or M == 0:
             return pred_logits.new_tensor(0.0), {
@@ -94,16 +99,15 @@ class HungarianInstanceLoss(nn.Module):
                 'num_predictions': M
             }
         
-        row, col = linear_sum_assignment(cost.detach().cpu().numpy())
-        gi = torch.as_tensor(row, device=device, dtype=torch.long)
-        pj = torch.as_tensor(col, device=device, dtype=torch.long)
+        with torch.no_grad():
+            row, col = linear_sum_assignment(cost.detach().cpu().numpy())
+            gi = torch.as_tensor(row, device=device, dtype=torch.long)
+            pj = torch.as_tensor(col, device=device, dtype=torch.long)
 
-        bce_pairs = bce[gi, pj] if gi.numel() else pred_logits.new_zeros(0, dtype=dtype, device=device)
+        focal_pairs = focal[gi, pj] if gi.numel() else pred_logits.new_zeros(0, dtype=dtype, device=device)
         dice_pairs = dice[gi, pj] if gi.numel() else pred_logits.new_zeros(0, dtype=dtype, device=device)
-        mask = self.lambda_bce * bce_pairs + self.lambda_dice * dice_pairs
-
-        denom = float(I) if self.normalize_by_num_gt else max(gi.numel(), 1)
-        loss_mask = mask.sum() / (denom + self.eps)
+        mask = focal_pairs + dice_pairs
+        loss_mask = mask.sum() / I
 
         remap_info = {
             'gt_indices': gi,
