@@ -22,7 +22,7 @@ class FocalLoss(nn.Module):
         gt_regr (batch x c x h x w)
         '''
 
-        pred = pred.float().clamp(min=1e-6, max=1 - 1e-6)
+        pred = pred.float().clamp(min=1e-3, max=1 - 1e-3)
         pos_inds = gt.eq(1).float()
         neg_inds = gt.lt(1).float()
 
@@ -44,7 +44,7 @@ class FocalLoss(nn.Module):
 
 
 class HungarianInstanceLoss(nn.Module):
-    def __init__(self, lambda_bce: float = 5.0, lambda_dice: float = 5.0, eps: float = 1e-6, normalize_by_num_gt: bool = True):
+    def __init__(self, lambda_bce: float = 5.0, lambda_dice: float = 5.0, eps: float = 1e-3, normalize_by_num_gt: bool = True):
         super().__init__()
         self.lambda_bce = float(lambda_bce)
         self.lambda_dice = float(lambda_dice)
@@ -52,24 +52,22 @@ class HungarianInstanceLoss(nn.Module):
         self.normalize_by_num_gt = bool(normalize_by_num_gt)
 
     def _bce_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
-        # logits: (N, M), G: (I, N)
         N = logits.shape[0]
-        ls_pos = F.logsigmoid(logits)    # (N, M) = log σ(x)
-        ls_neg = F.logsigmoid(-logits)   # (N, M) = log (1-σ(x))
-        # BCE(i,m) = mean_n [ -g * logσ(x) - (1-g)*log(1-σ(x)) ]
+        ls_pos = F.logsigmoid(logits)
+        ls_neg = F.logsigmoid(-logits)
         denom = N + self.eps
         cost = -((G / denom) @ ls_pos) - (((1.0 - G) / denom) @ ls_neg)
-        return cost   # (I, M)
+        return cost
 
     def _dice_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
-        # logits: (N, M), G: (I, N)
-        p = torch.sigmoid(logits)                 # (N, M)
-        inter = 2.0 * (G @ p)                     # (I, M)
-        sum_p = p.sum(0, keepdim=True)            # (1, M)
-        sum_g = G.sum(1, keepdim=True)            # (I, 1)
-        return 1.0 - inter / (sum_p + sum_g + self.eps)  # (I, M)
+        p = torch.sigmoid(logits)
+        inter = 2.0 * (G @ p)
+        sum_p = p.sum(0, keepdim=True)
+        sum_g = G.sum(1, keepdim=True)
+        return 1.0 - inter / (sum_p + sum_g + self.eps)
 
     def forward(self, pred_logits: torch.Tensor, gt_labels: torch.Tensor):
+        pred_logits = pred_logits.clamp(min=-10.0, max=10.0)
         device = pred_logits.device
         dtype = pred_logits.dtype
         N, M = pred_logits.shape
@@ -84,8 +82,8 @@ class HungarianInstanceLoss(nn.Module):
 
         I = gt_masks.shape[0]
 
-        bce = self._bce_matrix(pred_logits, gt_masks)
-        dice = self._dice_matrix(pred_logits, gt_masks)
+        bce = self._bce_matrix(pred_logits, gt_masks)  # .nan_to_num(nan=1e6, posinf=1e6, neginf=-1e6)
+        dice = self._dice_matrix(pred_logits, gt_masks)  # .nan_to_num(nan=1e6, posinf=1e6, neginf=-1e6)
         cost = bce + dice
 
         if I == 0 or M == 0:
@@ -95,8 +93,6 @@ class HungarianInstanceLoss(nn.Module):
                 'num_instances': I,
                 'num_predictions': M
             }
-
-        cost = torch.nan_to_num(cost, nan=1e6, posinf=1e6, neginf=-1e6)
         
         row, col = linear_sum_assignment(cost.detach().cpu().numpy())
         gi = torch.as_tensor(row, device=device, dtype=torch.long)

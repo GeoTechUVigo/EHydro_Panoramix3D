@@ -10,7 +10,7 @@ load_dotenv(Path(__file__).parent / '.env')
 
 TREE_PROJECTOR_DIR = Path(os.environ.get('TREE_PROJECTOR_DIR', Path.home() / 'tree_projector'))
 DATASET_FOLDER = 'MixedDataset'
-VERSION_NAME = 'tree_projector_VS-0.2_DA-48_E-3_V2'
+VERSION_NAME = 'tree_projector_VS-0.2_DA-48_E-3_V1'
 
 VOXEL_SIZE = 0.2
 FEAT_KEYS = ['intensity']

@@ -4,7 +4,7 @@ import torchsparse.nn.functional as spf
 
 from typing import Tuple
 
-from torch import nn, Tensor
+from torch import nn, Tensor, cat
 from torchsparse import nn as spnn, SparseTensor
 from torchsparse.backbones.modules import SparseConvBlock
 from spconv.pytorch import SparseConvTensor
@@ -16,18 +16,16 @@ class CentroidHead(nn.Module):
         super().__init__()
         # self.conv = spnn.Conv3d(latent_dim, 1, 1, bias=True)
         self.conv = nn.Sequential(
-            SparseConvBlock(latent_dim, latent_dim // 2, 3),
-            SparseConvBlock(latent_dim // 2, 1, 1),
-            #spnn.Conv3d(latent_dim // 2, 1, 1, bias=True)
+            SparseConvBlock(latent_dim + 1, latent_dim // 2, 3),
+            SparseConvBlock(latent_dim // 2, latent_dim // 4, 3),
+            spnn.Conv3d(latent_dim // 4, 1, 1, bias=True)
         )
-
-        self.mixer = spnn.Conv3d(2, 1, 3, bias=True)
 
         self.act = nn.Sigmoid()
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
         self.avg_pool = SparseAvgPool(3, kernel_size=3, stride=1, padding=1, subm=True)
 
-        nn.init.constant_(self.mixer.bias, val = math.log(instance_density / (1 - instance_density)))
+        nn.init.constant_(self.conv[2].bias, val = math.log(instance_density / (1 - instance_density)))
         #nn.init.constant_(self.conv[2].bias, val = math.log(instance_density / (1 - instance_density)))
         #nn.init.kaiming_normal_(self.conv[0][0].kernel, mode='fan_out')
 
@@ -38,18 +36,15 @@ class CentroidHead(nn.Module):
         hashA = spf.sphash(A.C)
         hashB = spf.sphash(B.C)
 
-        idxB_to_A = spf.sphashquery(hashB, hashA)
-        outB = torch.zeros(A.C.size(0), B.F.size(1), device=A.C.device, dtype=B.F.dtype)
-
-        mask = idxB_to_A >= 0
+        idxA_to_B = spf.sphashquery(hashA, hashB)
+        outB = torch.zeros((A.C.size(0), B.F.size(1)), device=A.F.device, dtype=A.F.dtype)
+        mask = idxA_to_B >= 0
         if mask.any():
-            rowsA = idxB_to_A[mask].to(torch.long)
-            rowsB = torch.nonzero(mask, as_tuple=False).squeeze(1)
-            outB.index_copy_(0, rowsA, B.F[rowsB])
-
-        out_feats = torch.cat([A.F, outB.to(A.F.dtype)], dim=1)
-
-        return SparseTensor(coords=A.C, feats=out_feats)
+            ai = torch.nonzero(mask, as_tuple=False).squeeze(1)
+            bi = idxA_to_B[mask].to(torch.long)
+            outB[ai] = B.F[bi]
+        
+        return SparseTensor(coords=A.C, feats=cat((A.F, outB.to(A.F.dtype)), dim=1))
     
     @torch.no_grad()
     def _find_centroid_peaks(self, cluster_feats: SparseTensor, centroid_scores: SparseTensor, inv_map: Tensor) -> Tuple[SparseTensor, SparseTensor]:
@@ -93,8 +88,8 @@ class CentroidHead(nn.Module):
         return SparseTensor(coords=peak_coords, feats=peak_feats), SparseTensor(coords=peak_coords, feats=peak_scores)
 
     def forward(self, voxel_feats: SparseTensor, cluster_feats: SparseTensor, centroid_scores_off: SparseTensor, inv_map: Tensor, centroid_score_labels: SparseTensor = None) -> SparseTensor:
-        centroid_scores = self._union_sparse_layers(self.conv(voxel_feats), centroid_scores_off)
-        centroid_scores = self.mixer(centroid_scores)
+        voxel_feats = self._union_sparse_layers(voxel_feats, centroid_scores_off)
+        centroid_scores = self.conv(voxel_feats)
         centroid_scores.F = self.act(centroid_scores.F)
 
         centroid_feats, centroid_confidences = self._find_centroid_peaks(cluster_feats, centroid_scores if centroid_score_labels is None else centroid_score_labels, inv_map)

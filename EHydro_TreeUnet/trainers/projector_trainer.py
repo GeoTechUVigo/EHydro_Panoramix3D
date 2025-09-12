@@ -298,11 +298,9 @@ class TreeProjectorTrainer:
             iou = metric(instance_output_remap, instance_labels.F)
 
         tp_mask = iou >= iou_thresh
-        np_count = (~tp_mask).sum().item()
-
         tp = int(tp_mask.sum().item())
-        fp = np_count + max(0, remap_info['num_predictions'] - remap_info['num_instances'])
-        fn = np_count + max(0, remap_info['num_instances'] - remap_info['num_predictions'])
+        fp = remap_info['num_predictions'] - tp
+        fn = remap_info['num_instances'] - tp
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else float('nan')
         recall = tp / (tp + fn) if (tp + fn) > 0 else float('nan')
@@ -412,7 +410,7 @@ class TreeProjectorTrainer:
 
                 instance_labels = feed_dict["instance_labels"].to(self._device)
                 instance_labels.C = instance_labels.C[semantic_mask]
-                instance_labels.F = (instance_labels.F[semantic_mask] - 1)
+                instance_labels.F = instance_labels.F[semantic_mask] - 1
 
                 optimizer.zero_grad()
     
@@ -420,8 +418,7 @@ class TreeProjectorTrainer:
                     #if epoch < 3:
                     #    semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
                     #else:
-                    semantic_output, centroid_score_output, offset_output, centroid_confidences, instance_output = self._model(inputs, semantic_labels)
-
+                    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
                     loss = self._compute_loss(
                         semantic_output=semantic_output,
                         semantic_labels=semantic_labels,
@@ -437,7 +434,7 @@ class TreeProjectorTrainer:
                     stat = self._compute_metrics(
                         semantic_output,
                         semantic_labels,
-                        centroid_confidences,
+                        centroid_confidences_output,
                         instance_output,
                         instance_labels,
                         loss['remap_info']
@@ -522,25 +519,11 @@ class TreeProjectorTrainer:
                 'instance_loss': deque(maxlen=window_size)
             }
 
-            pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout, dynamic_ncols=True, bar_format="{l_bar}{bar}{r_bar}\n{postfix}")
+            pbar = tqdm(self._train_loader, desc='[Val]', file=sys.stdout, dynamic_ncols=True, bar_format="{l_bar}{bar}{r_bar}\n{postfix}")
             for feed_dict in pbar:
-                semantic_labels_cpu = feed_dict["semantic_labels"].F.numpy()
-                semantic_mask = semantic_labels_cpu.F != 0
-
-                centroid_score_labels_cpu = feed_dict["centroid_score_labels"].F.numpy()
-                centroid_score_labels_cpu.C = centroid_score_labels_cpu.C[semantic_mask]
-                centroid_score_labels_cpu.F = centroid_score_labels_cpu.F[semantic_mask]
-
-                offset_labels_cpu = feed_dict["offset_labels"].F.numpy()
-                offset_labels_cpu.C = offset_labels_cpu.C[semantic_mask]
-                offset_labels_cpu.F = offset_labels_cpu.F[semantic_mask]
-
-                instance_labels_cpu = feed_dict["instance_labels"].F.numpy()
-                instance_labels_cpu.C = instance_labels_cpu.C[semantic_mask]
-                instance_labels_cpu.F = instance_labels_cpu.F[semantic_mask]
-
                 inputs = feed_dict["inputs"].to(self._device)
                 semantic_labels = feed_dict["semantic_labels"].to(self._device)
+                semantic_mask = semantic_labels.F != 0
 
                 centroid_score_labels = feed_dict["centroid_score_labels"].to(self._device)
                 centroid_score_labels.C = centroid_score_labels.C[semantic_mask]
@@ -552,12 +535,10 @@ class TreeProjectorTrainer:
 
                 instance_labels = feed_dict["instance_labels"].to(self._device)
                 instance_labels.C = instance_labels.C[semantic_mask]
-                instance_labels.F = instance_labels.F[semantic_mask]
+                instance_labels.F = instance_labels.F[semantic_mask] - 1
     
                 with amp.autocast(enabled=True):
-                    semantic_output, centroid_score_output, offset_output, centroid_confidence_output, instance_output = self._model(inputs)
-                    # instance_labels_remap = self._apply_hungarian(instance_output, instance_labels)
-
+                    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
                     loss = self._compute_loss(
                         semantic_output=semantic_output,
                         semantic_labels=semantic_labels,
@@ -569,15 +550,14 @@ class TreeProjectorTrainer:
                         instance_labels=instance_labels
                     )
 
-                instance_count = len(torch.unique(instance_labels.F))
-                stat = self._compute_metrics(semantic_output, semantic_labels, instance_output, instance_labels, instance_count)
-
-                voxels = semantic_output.C.cpu().numpy()
-                semantic_output = torch.argmax(semantic_output.F.cpu(), dim=1).numpy()
-                centroid_score_output = centroid_score_output.F.cpu().numpy()
-                centroid_voxels = centroid_confidence_output.C.cpu().numpy()
-                centroid_confidence_output = centroid_confidence_output.F.cpu().numpy()
-                instance_output_labels = torch.argmax(instance_output.F, dim=1).cpu().numpy()
+                stat = self._compute_metrics(
+                    semantic_output,
+                    semantic_labels,
+                    centroid_confidences_output,
+                    instance_output,
+                    instance_labels,
+                    loss['remap_info']
+                )
 
                 loss_windows['total_loss'].append(loss['total_loss'].item())
                 loss_windows['semantic_loss'].append(loss['semantic_loss'].item())
@@ -591,7 +571,7 @@ class TreeProjectorTrainer:
 
                 loss_trends = {
                     k: f"{v.item():.4f} {'→' if slopes[k] < 1e-4 and slopes[k] > -1e-4 else ('↑' if slopes[k] > 0 else '↓')}" for k, v in loss.items()
-                    for k, v in loss.items()
+                    for k, v in loss.items() if k != 'remap_info'
                 }
 
                 pbar.set_postfix({
@@ -619,4 +599,15 @@ class TreeProjectorTrainer:
                 self._writer.add_scalar('Val_Instance/Instance_Recall', stat['instance_recall'], step)
                 self._writer.add_scalar('Val_Instance/Instance_F1', stat['instance_f1'], step)
 
-                yield voxels, semantic_output, semantic_labels_cpu, centroid_score_output, centroid_score_labels_cpu, offset_output, offset_labels_cpu, instance_output_labels, instance_labels_cpu, centroid_voxels, centroid_confidence_output
+                yield {
+                    'semantic_output': semantic_output,
+                    'semantic_labels': semantic_labels,
+                    'centroid_score_output': centroid_score_output,
+                    'centroid_score_labels': centroid_score_labels,
+                    'centroid_confidence_output': centroid_confidences_output,
+                    'offset_output': offset_output,
+                    'offset_labels': offset_labels,
+                    'instance_output': instance_output,
+                    'instance_labels': instance_labels,
+                    'remap_info': loss['remap_info']
+                }
