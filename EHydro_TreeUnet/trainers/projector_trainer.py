@@ -321,7 +321,7 @@ class TreeProjectorTrainer:
         instance_tp, instance_fp, instance_fn, instance_precision, instance_recall, instance_f1 = self._compute_instance_metrics(
             instance_output,
             instance_labels,
-            iou_thresh=0.0,
+            iou_thresh=0.5,
             remap_info=remap_info
         )
 
@@ -455,6 +455,7 @@ class TreeProjectorTrainer:
 
                     pbar.set_postfix({
                         'VRAM': f'{torch.cuda.memory_reserved(self._device) / (1024 ** 3):.2f} GB',
+                        'TP': stat['tp'],
                         'Total': loss_trends['total_loss'],
                         'Semantic': loss_trends['semantic_loss'],
                         'Centroid': loss_trends['centroid_loss'],
