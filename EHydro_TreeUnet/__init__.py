@@ -1,1 +1,1 @@
-from .models import TreeProjector, TreeUNet
+from .models import TreeProjector

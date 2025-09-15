@@ -2,12 +2,8 @@ import itertools
 import shutil
 import torch
 import sys
-import os
-import time
 
-import open3d as o3d
 import torchsparse
-import pickle
 import numpy as np
 
 from typing import List, Optional, Dict, Iterator, Tuple, Union, Deque
@@ -23,7 +19,6 @@ from torchmetrics.classification import MulticlassJaccardIndex, BinaryJaccardInd
 from torchsparse import SparseTensor
 
 from pathlib import Path
-from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
 from .utils import sparse_unique_id_collate_fn
@@ -65,7 +60,6 @@ class TreeProjectorTrainer:
                 (3, 128, 3, 2),
                 (1, 128, (1, 1, 3), (1, 1, 2)),
             ],
-            latent_dim: int = 256,
             instance_density: float = 0.01,
             score_thres: float = 0.1,
             centroid_thres: float = 0.2,
@@ -143,7 +137,6 @@ class TreeProjectorTrainer:
             in_channels=self._dataset.feat_channels,
             num_classes=self._dataset.num_classes,
             resnet_blocks=resnet_blocks,
-            latent_dim=latent_dim,
             instance_density=instance_density,
             score_thres=score_thres,
             centroid_thres=centroid_thres,
@@ -174,7 +167,6 @@ class TreeProjectorTrainer:
 
         scales_m = [3 * scale for scale in scales_m]
         print(f'\nMinimum scene size: ({scales_m[0]:.1f}, {scales_m[1]:.1f}, {scales_m[2]:.1f}) meters')
-        print(f'Total channels in backbone: {out_channels_total} -> {latent_dim} in latent space.')
         if not training:
             self._load_weights()
 
@@ -245,17 +237,22 @@ class TreeProjectorTrainer:
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F) * self._semantic_loss_coef
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F) * self._centroid_loss_coef
         loss_offset = self._criterion_offset(offset_output.F, offset_labels.F) * self._offset_loss_coef
-        loss_inst, remap_info = self._criterion_instance(instance_output.F, instance_labels.F)
-        loss_inst = loss_inst * self._instance_loss_coef
 
-        total_loss = loss_sem + loss_centroid + loss_offset + loss_inst
+        loss_inst, remap_info = self._criterion_instance(instance_output.F, instance_labels.F)
+        total_loss_inst = loss_inst['total_loss'] * self._instance_loss_coef
+
+        total_loss = loss_sem + loss_centroid + loss_offset + total_loss_inst
 
         return {
             'total_loss': total_loss,
             'semantic_loss': loss_sem,
             'centroid_loss': loss_centroid,
             'offset_loss': loss_offset,
-            'instance_loss': loss_inst,
+            'instance_loss': total_loss_inst,
+            'matched_loss': loss_inst['matched_loss'],
+            'unmatched_loss': loss_inst['unmatched_loss'],
+            'focal_loss': loss_inst['focal_loss'],
+            'dice_loss': loss_inst['dice_loss'],
             'remap_info': remap_info
         }
     
@@ -389,10 +386,10 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'Version name: {self._version_name}')
             print(f'\n=== Starting epoch {epoch + 1} ===')
-            #if epoch < 3:
-            #    print('Training instance correlation with labels instead of predictions by now...\n')
-            #else:
-            #    print('Training instance correlation with predictions.\n')
+            if epoch < 3:
+                print('Training instance correlation with labels instead of predictions by now...\n')
+            else:
+                print('Training instance correlation with predictions.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout, dynamic_ncols=True)
             for feed_dict in pbar:
@@ -415,10 +412,10 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    #if epoch < 3:
-                    #    semantic_output, centroid_score_output, offset_output, _, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
-                    #else:
-                    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
+                    if epoch < 3:
+                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
+                    else:
+                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
                     loss = self._compute_loss(
                         semantic_output=semantic_output,
                         semantic_labels=semantic_labels,
@@ -452,11 +449,12 @@ class TreeProjectorTrainer:
 
                     loss_trends = {
                         k: f"{v.item():.4f} {'→' if slopes[k] < 1e-4 and slopes[k] > -1e-4 else ('↑' if slopes[k] > 0 else '↓')}" for k, v in loss.items()
-                        for k, v in loss.items() if k != 'remap_info'
+                        for k, v in loss.items() if k not in ('remap_info', 'matched_loss', 'unmatched_loss', 'focal_loss', 'dice_loss')
                     }
 
                     pbar.set_postfix({
                         'VRAM': f'{torch.cuda.memory_reserved(self._device) / (1024 ** 3):.2f} GB',
+                        'Matched': f"{stat['instances_matched']} / {stat['centroids_gt']}",
                         'TP': f"{stat['tp']} / {stat['centroids_gt']}",
                         'Total': loss_trends['total_loss'],
                         'Semantic': loss_trends['semantic_loss'],
@@ -466,21 +464,25 @@ class TreeProjectorTrainer:
                     })
 
                     step = epoch * len(self._train_loader) + pbar.n
-                    self._writer.add_scalar('Train_Loss/Total_loss', loss['total_loss'].item(), step)
-                    self._writer.add_scalar('Train_Loss/Semantic_loss', loss['semantic_loss'].item(), step)
-                    self._writer.add_scalar('Train_Loss/Centroid_loss', loss['centroid_loss'].item(), step)
-                    self._writer.add_scalar('Train_Loss/Offset_loss', loss['offset_loss'].item(), step)
-                    self._writer.add_scalar('Train_Loss/Instance_loss', loss['instance_loss'].item(), step)
-                    self._writer.add_scalar('Train_Semantic/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
-                    self._writer.add_scalar('Train_Semantic/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
-                    self._writer.add_scalar('Train_Semantic/Mean_semantic_Recall', stat['mean_semantic_recall'], step)
-                    self._writer.add_scalar('Train_Semantic/Mean_semantic_F1', stat['mean_semantic_f1'], step)
-                    self._writer.add_scalar('Train_Centroids/Centroids_found_ratio', stat['centroids_found'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
-                    self._writer.add_scalar('Train_Centroids/Mean_centroid_confidence', stat['mean_centroid_confidence'], step)
-                    self._writer.add_scalar('Train_Instance/Instances_matched_ratio', stat['instances_matched'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
-                    self._writer.add_scalar('Train_Instance/Instance_Precision', stat['instance_precision'], step)
-                    self._writer.add_scalar('Train_Instance/Instance_Recall', stat['instance_recall'], step)
-                    self._writer.add_scalar('Train_Instance/Instance_F1', stat['instance_f1'], step)
+                    self._writer.add_scalar('Train_Loss/1/Total_loss', loss['total_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/2/Semantic_loss', loss['semantic_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/3/Centroid_loss', loss['centroid_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/4/Offset_loss', loss['offset_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/5/Instance_loss', loss['instance_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/6/Matched_loss', loss['matched_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/7/Unmatched_loss', loss['unmatched_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/8/Focal_loss', loss['focal_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/9/Dice_loss', loss['dice_loss'].item(), step)
+                    self._writer.add_scalar('Train_Semantic/1/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
+                    self._writer.add_scalar('Train_Semantic/2/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
+                    self._writer.add_scalar('Train_Semantic/3/Mean_semantic_Recall', stat['mean_semantic_recall'], step)
+                    self._writer.add_scalar('Train_Semantic/4/Mean_semantic_F1', stat['mean_semantic_f1'], step)
+                    self._writer.add_scalar('Train_Centroids/1/Centroids_found_ratio', stat['centroids_found'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
+                    self._writer.add_scalar('Train_Centroids/2/Mean_centroid_confidence', stat['mean_centroid_confidence'], step)
+                    self._writer.add_scalar('Train_Instance/1/Instances_matched_ratio', stat['instances_matched'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
+                    self._writer.add_scalar('Train_Instance/2/Instance_Precision', stat['instance_precision'], step)
+                    self._writer.add_scalar('Train_Instance/3/Instance_Recall', stat['instance_recall'], step)
+                    self._writer.add_scalar('Train_Instance/4/Instance_F1', stat['instance_f1'], step)
 
                 scaler.scale(loss['total_loss']).backward()
                 scaler.step(optimizer)
@@ -572,7 +574,7 @@ class TreeProjectorTrainer:
 
                 loss_trends = {
                     k: f"{v.item():.4f} {'→' if slopes[k] < 1e-4 and slopes[k] > -1e-4 else ('↑' if slopes[k] > 0 else '↓')}" for k, v in loss.items()
-                    for k, v in loss.items() if k != 'remap_info'
+                    for k, v in loss.items() if k not in ('remap_info', 'matched_loss', 'unmatched_loss', 'focal_loss', 'dice_loss')
                 }
 
                 pbar.set_postfix({
@@ -584,21 +586,25 @@ class TreeProjectorTrainer:
                 })
 
                 step = pbar.n
-                self._writer.add_scalar('Val_Loss/Total_loss', loss['total_loss'].item(), step)
-                self._writer.add_scalar('Val_Loss/Semantic_loss', loss['semantic_loss'].item(), step)
-                self._writer.add_scalar('Val_Loss/Centroid_loss', loss['centroid_loss'].item(), step)
-                self._writer.add_scalar('Val_Loss/Offset_loss', loss['offset_loss'].item(), step)
-                self._writer.add_scalar('Val_Loss/Instance_loss', loss['instance_loss'].item(), step)
-                self._writer.add_scalar('Val_Semantic/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
-                self._writer.add_scalar('Val_Semantic/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
-                self._writer.add_scalar('Val_Semantic/Mean_semantic_Recall', stat['mean_semantic_recall'], step)
-                self._writer.add_scalar('Val_Semantic/Mean_semantic_F1', stat['mean_semantic_f1'], step)
-                self._writer.add_scalar('Val_Centroids/Centroids_found_ratio', stat['centroids_found'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
-                self._writer.add_scalar('Val_Centroids/Mean_centroid_confidence', stat['mean_centroid_confidence'], step)
-                self._writer.add_scalar('Val_Instance/Instances_matched_ratio', stat['instances_matched'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
-                self._writer.add_scalar('Val_Instance/Instance_Precision', stat['instance_precision'], step)
-                self._writer.add_scalar('Val_Instance/Instance_Recall', stat['instance_recall'], step)
-                self._writer.add_scalar('Val_Instance/Instance_F1', stat['instance_f1'], step)
+                self._writer.add_scalar('Val_Loss/1/Total_loss', loss['total_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/2/Semantic_loss', loss['semantic_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/3/Centroid_loss', loss['centroid_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/4/Offset_loss', loss['offset_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/5/Instance_loss', loss['instance_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/6/Matched_loss', loss['matched_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/7/Unmatched_loss', loss['unmatched_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/8/Focal_loss', loss['focal_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/9/Dice_loss', loss['dice_loss'].item(), step)
+                self._writer.add_scalar('Val_Semantic/1/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
+                self._writer.add_scalar('Val_Semantic/2/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
+                self._writer.add_scalar('Val_Semantic/3/Mean_semantic_Recall', stat['mean_semantic_recall'], step)
+                self._writer.add_scalar('Val_Semantic/4/Mean_semantic_F1', stat['mean_semantic_f1'], step)
+                self._writer.add_scalar('Val_Centroids/1/Centroids_found_ratio', stat['centroids_found'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
+                self._writer.add_scalar('Val_Centroids/2/Mean_centroid_confidence', stat['mean_centroid_confidence'], step)
+                self._writer.add_scalar('Val_Instance/1/Instances_matched_ratio', stat['instances_matched'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
+                self._writer.add_scalar('Val_Instance/2/Instance_Precision', stat['instance_precision'], step)
+                self._writer.add_scalar('Val_Instance/3/Instance_Recall', stat['instance_recall'], step)
+                self._writer.add_scalar('Val_Instance/4/Instance_F1', stat['instance_f1'], step)
 
                 yield {
                     'semantic_output': semantic_output,
