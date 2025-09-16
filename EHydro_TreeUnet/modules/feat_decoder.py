@@ -94,5 +94,6 @@ class FeatDecoder(nn.Module):
         
         if reduce is not None:
             current.F = scatter_mean(current.F, reduce, dim=0)
+            
 
         return self.proj(current)

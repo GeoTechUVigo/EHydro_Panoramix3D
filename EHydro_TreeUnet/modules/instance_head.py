@@ -30,13 +30,14 @@ class InstanceHead(nn.Module):
             if not centroid_mask.any():
                 continue
 
-            #with torch.no_grad():
-            #    batch_dists = (cluster_descriptors.C[cluster_mask, 1:][:, None, :] - centroid_descriptors.C[centroid_mask, 1:][None, :, :]).to(cluster_descriptors.F.dtype)
-            #    batch_dists = torch.norm(batch_dists, p=2, dim=-1).clamp(min=0.1)
-            #    attention_weights = F.softmax(-batch_dists, dim=-1)
+            with torch.no_grad():
+                batch_dists = (cluster_descriptors.C[cluster_mask, 1:][:, None, :] - centroid_descriptors.C[centroid_mask, 1:][None, :, :]).to(cluster_descriptors.F.dtype)
+                batch_dists = torch.norm(batch_dists, p=2, dim=-1).clamp(min=0.1)
+                attention_weights = F.softmax(-batch_dists, dim=-1)
             
             batch_centroid_descriptors = centroid_descriptors.F[centroid_mask]
-            batch_output = (cluster_descriptors.F[cluster_mask] @ batch_centroid_descriptors.T) # * attention_weights
+            batch_output = ((cluster_descriptors.F[cluster_mask] @ batch_centroid_descriptors.T) * attention_weights).clamp(min=-10, max=10)
+            #print(f'max output: {batch_output.max().item():.4f}, min output: {batch_output.min().item():.4f}')
 
             rows = cluster_mask.nonzero(as_tuple=False)
             cols = centroid_mask.nonzero(as_tuple=False).squeeze(1)

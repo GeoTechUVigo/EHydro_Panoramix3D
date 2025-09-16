@@ -2,7 +2,65 @@ import torch
 
 from torch import nn
 from torch.nn import functional as F
-from scipy.optimize import linear_sum_assignment
+from . import HungarianMatcher
+
+
+def dice_loss(
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        num_masks: float,
+    ):
+    """
+    Compute the DICE loss, similar to generalized IOU for masks
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    """
+    if inputs.numel() == 0:
+        return torch.tensor(0.0, device=inputs.device, dtype=inputs.dtype)
+    
+    inputs = inputs.sigmoid()
+    inputs = inputs.flatten(1)
+    numerator = 2 * (inputs * targets).sum(-1)
+    denominator = inputs.sum(-1) + targets.sum(-1)
+    loss = 1 - (numerator + 1) / (denominator + 1)
+    return loss.sum() / num_masks
+
+
+dice_loss_jit = torch.jit.script(
+    dice_loss
+)  # type: torch.jit.ScriptModule
+
+
+def sigmoid_ce_loss(
+        inputs: torch.Tensor,
+        targets: torch.Tensor,
+        num_masks: float,
+    ):
+    """
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    Returns:
+        Loss tensor
+    """
+    if inputs.numel() == 0:
+        return torch.tensor(0.0, device=inputs.device, dtype=inputs.dtype)
+    
+    loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+
+    return loss.mean(1).sum() / num_masks
+
+
+sigmoid_ce_loss_jit = torch.jit.script(
+    sigmoid_ce_loss
+)  # type: torch.jit.ScriptModule
 
 
 class FocalLoss(nn.Module):
@@ -41,160 +99,89 @@ class FocalLoss(nn.Module):
         else:
             loss = loss - (pos_loss + neg_loss) / num_pos
         return loss
-
+    
 
 class HungarianInstanceLoss(nn.Module):
-    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 1.0, lambda_focal: float = 1.0, lambda_dice: float = 1.0, alpha_focal: float = 0.25, gamma_focal: float = 2.0):
+    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 0.2, lambda_bce: float = 1.0, lambda_dice: float = 0.5):
         super().__init__()
 
         self._lambda_matched = lambda_matched
         self._lambda_unmatched = lambda_unmatched
 
-        self._lambda_focal = lambda_focal
+        self._lambda_bce = lambda_bce
         self._lambda_dice = lambda_dice
 
-        self._alpha_focal = alpha_focal
-        self._gamma_focal = gamma_focal
+        self._matcher = HungarianMatcher(lambda_bce=lambda_bce, lambda_dice=lambda_dice)
 
-    
-    def _bce_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
-        hw = logits.shape[1]
-        G = G.T
+    def forward(self, pred_logits: torch.Tensor, gt_labels: torch.Tensor, centroid_batches: torch.Tensor):
+        batch_indices = torch.unique(pred_logits.C[:, 0])
+        uniq, inv = torch.unique(gt_labels.F, return_inverse=True)
+        uniq_batches = torch.zeros(uniq.size(0), device=gt_labels.F.device, dtype=torch.int32)
+        uniq_batches.scatter_(0, inv, gt_labels.C[:, 0])
 
-        pos = F.binary_cross_entropy_with_logits(
-            logits, torch.ones_like(logits), reduction="none"
-        )
-        neg = F.binary_cross_entropy_with_logits(
-            logits, torch.zeros_like(logits), reduction="none"
-        )
+        gt_masks = (gt_labels.F.unsqueeze(0) == uniq.unsqueeze(1)).to(dtype=pred_logits.F.dtype)
 
-        loss = torch.einsum("nc,mc->nm", pos, G) + torch.einsum(
-            "nc,mc->nm", neg, (1 - G)
-        )
+        losses = torch.zeros(5, device=pred_logits.F.device, dtype=pred_logits.F.dtype)
+        global_remap_info = {
+            'gt_indices': torch.empty(0, dtype=torch.int64, device=pred_logits.F.device),
+            'pred_indices': torch.empty(0, dtype=torch.int64, device=pred_logits.F.device),
+            'num_instances': uniq.size(0),
+            'num_predictions': pred_logits.F.size(1)
+        }
 
-        return (loss / hw).T
-    
-    def _focal_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
-        x = logits.float()
-        Gf = G.float()
+        for batch_idx in batch_indices:
+            voxel_mask = pred_logits.C[:, 0] == batch_idx
+            pred_mask = centroid_batches == batch_idx
+            gt_mask = uniq_batches == batch_idx
 
-        p = torch.sigmoid(x)
-        log_p   = F.logsigmoid(x)
-        log_1mp = F.logsigmoid(-x)
+            if not pred_mask.any():
+                continue
 
-        pos_fl = ((1.0 - p) ** self._gamma_focal) * (-log_p)
-        neg_fl = (p ** self._gamma_focal) * (-log_1mp)
+            batch_logits = pred_logits.F.T[pred_mask, :][:, voxel_mask]
+            batch_gt_masks = gt_masks[gt_mask, :][:, voxel_mask]
 
-        w_pos = self._alpha_focal * Gf
-        w_neg = (1.0 - self._alpha_focal) * (1.0 - Gf)
+            #print(f'max logits: {batch_logits.max().item():.4f}, min logits: {batch_logits.min().item():.4f}')
 
-        num = (w_pos @ pos_fl) + (w_neg @ neg_fl)
-        den = w_pos.sum(dim=1, keepdim=True) + w_neg.sum(dim=1, keepdim=True)
-        cost = num / (den + 1e-6)
+            remap_info = self._matcher(batch_logits, batch_gt_masks)
+            bce_loss = self._lambda_bce * sigmoid_ce_loss_jit(
+                batch_logits[remap_info['pred_indices']],
+                batch_gt_masks[remap_info['gt_indices']],
+                num_masks=batch_gt_masks.size(0)
+            )
+            dice_loss = self._lambda_dice * dice_loss_jit(
+                batch_logits[remap_info['pred_indices']],
+                batch_gt_masks[remap_info['gt_indices']],
+                num_masks=batch_gt_masks.size(0)
+            )
 
-        return cost.to(logits.dtype)
+            matched_loss = self._lambda_matched * (bce_loss + dice_loss)
+            unmatched_mask = torch.ones(batch_logits.size(0), dtype=torch.bool, device=batch_logits.device)
+            if remap_info['pred_indices'].numel():
+                unmatched_mask[remap_info['pred_indices']] = False
 
-    def _dice_matrix(self, logits: torch.Tensor, G: torch.Tensor) -> torch.Tensor:
-        p = torch.sigmoid(logits)
-        inter = 2.0 * (G @ p)
-        sum_p = p.sum(0, keepdim=True)
-        sum_g = G.sum(1, keepdim=True)
-        return 1.0 - inter / (sum_p + sum_g)
+            unmatched_logits = batch_logits[unmatched_mask]
+            unmatched_loss = self._lambda_unmatched * sigmoid_ce_loss_jit(unmatched_logits, torch.zeros_like(unmatched_logits), num_masks=unmatched_logits.size(0))
+            total_loss = matched_loss + unmatched_loss
 
-    def forward(self, pred_logits: torch.Tensor, gt_labels: torch.Tensor):
-        pred_logits = pred_logits.clamp(min=-10.0, max=10.0)
-        device = pred_logits.device
-        dtype = pred_logits.dtype
-        N, M = pred_logits.shape
+            losses[0] += total_loss
+            losses[1] += matched_loss
+            losses[2] += unmatched_loss
+            losses[3] += bce_loss
+            losses[4] += dice_loss
 
-        labels = gt_labels.view(-1).to(device=device, dtype=torch.long)
-        uniq = torch.unique(labels)
+            pred_global = torch.nonzero(pred_mask, as_tuple=False).squeeze(1)
+            gt_global = torch.nonzero(gt_mask, as_tuple=False).squeeze(1)
 
-        if uniq.numel() == 0:
-            gt_masks = pred_logits.new_zeros((0, N), dtype=dtype)
-        else:
-            gt_masks = (labels.unsqueeze(0) == uniq.unsqueeze(1)).to(dtype=dtype)
+            global_remap_info['gt_indices'] = torch.cat([global_remap_info['gt_indices'], gt_global[remap_info['gt_indices']]], dim=0)
+            global_remap_info['pred_indices'] = torch.cat([global_remap_info['pred_indices'], pred_global[remap_info['pred_indices']]], dim=0)
 
-        I = gt_masks.shape[0]
-        if I == 0:
-            total_loss = F.softplus(pred_logits).mean()
-            loss = {
-                'total_loss': total_loss,
-                'matched_loss': pred_logits.new_tensor(0.0),
-                'unmatched_loss': total_loss,
-                'focal_loss': pred_logits.new_tensor(0.0),
-                'dice_loss': pred_logits.new_tensor(0.0)
-            }
-            remap_info = {
-                'gt_indices': torch.empty(0, dtype=torch.long, device=device),
-                'pred_indices': torch.empty(0, dtype=torch.long, device=device),
-                'num_instances': I,
-                'num_predictions': M
-            }
-            return loss, remap_info
-
-        if M == 0:
-            total_loss = pred_logits.new_tensor(0.0)
-            loss = {
-                'total_loss': total_loss,
-                'matched_loss': pred_logits.new_tensor(0.0),
-                'unmatched_loss': pred_logits.new_tensor(0.0),
-                'focal_loss': pred_logits.new_tensor(0.0),
-                'dice_loss': pred_logits.new_tensor(0.0)
-            }
-            remap_info = {
-                'gt_indices': torch.empty(0, dtype=torch.long, device=device),
-                'pred_indices': torch.empty(0, dtype=torch.long, device=device),
-                'num_instances': I,
-                'num_predictions': M
-            }
-            return loss, remap_info
-        
-        focal = self._bce_matrix(pred_logits, gt_masks) * self._lambda_focal
-        dice = self._dice_matrix(pred_logits, gt_masks) * self._lambda_dice
-
-        # print('focal nans: ', torch.isnan(focal).sum().item(), ' dice nans: ', torch.isnan(dice).sum().item())
-        cost = focal + dice
-        
-        with torch.no_grad():
-            row, col = linear_sum_assignment(cost.detach().cpu().numpy())
-            gi = torch.as_tensor(row, device=device, dtype=torch.long)
-            pj = torch.as_tensor(col, device=device, dtype=torch.long)
-
-        focal_pairs = focal[gi, pj] if gi.numel() else pred_logits.new_zeros(0, dtype=dtype, device=device)
-        dice_pairs = dice[gi, pj] if gi.numel() else pred_logits.new_zeros(0, dtype=dtype, device=device)
-        focal_loss = focal_pairs.sum() / I
-        dice_loss = dice_pairs.sum() / I
-        matched_loss = self._lambda_matched * (focal_loss + dice_loss)
-
-        unmatched_mask = torch.ones(M, dtype=torch.bool, device=device)
-        if pj.numel():
-            unmatched_mask[pj] = False
-
-        unmatched_logits = pred_logits[:, unmatched_mask]
-        if unmatched_logits.numel() == 0:
-            unmatched_loss = pred_logits.new_tensor(0.0)
-        else:
-            unmatched_loss = self._lambda_unmatched * F.softplus(unmatched_logits).mean()
-
-        total_loss = matched_loss + unmatched_loss
-
-        # print(f'Matched Loss: {matched_loss.item():.4f}, Unmatched Loss: {unmatched_loss.item():.4f}')
-        # print(f'focal: {focal.mean().item():.4f}, dice: {dice.mean().item():.4f}')
-
+        losses = losses / batch_indices.size(0)
         loss = {
-            'total_loss': total_loss,
-            'matched_loss': matched_loss,
-            'unmatched_loss': unmatched_loss,
-            'focal_loss': focal_loss.mean(),
-            'dice_loss': dice_loss.mean()
+            'total_loss': losses[0],
+            'matched_loss': losses[1],
+            'unmatched_loss': losses[2],
+            'bce_loss': losses[3],
+            'dice_loss': losses[4]
         }
 
-        remap_info = {
-            'gt_indices': gi,
-            'pred_indices': pj,
-            'num_instances': I,
-            'num_predictions': M
-        }
-
-        return loss, remap_info
+        return loss, global_remap_info

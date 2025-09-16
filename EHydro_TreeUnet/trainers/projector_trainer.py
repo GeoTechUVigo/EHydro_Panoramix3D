@@ -231,16 +231,18 @@ class TreeProjectorTrainer:
             offset_output: SparseTensor,
             offset_labels: SparseTensor,
             instance_output: SparseTensor,
-            instance_labels: SparseTensor
+            instance_labels: SparseTensor,
+            centroid_confidences: SparseTensor
         ) -> Tensor:
         
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F) * self._semantic_loss_coef
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F) * self._centroid_loss_coef
         loss_offset = self._criterion_offset(offset_output.F, offset_labels.F) * self._offset_loss_coef
-
-        loss_inst, remap_info = self._criterion_instance(instance_output.F, instance_labels.F)
+        loss_inst, remap_info = self._criterion_instance(instance_output,
+                                                         instance_labels,
+                                                         centroid_batches=centroid_confidences.C[:, 0])
+        
         total_loss_inst = loss_inst['total_loss'] * self._instance_loss_coef
-
         total_loss = loss_sem + loss_centroid + loss_offset + total_loss_inst
 
         return {
@@ -251,7 +253,7 @@ class TreeProjectorTrainer:
             'instance_loss': total_loss_inst,
             'matched_loss': loss_inst['matched_loss'],
             'unmatched_loss': loss_inst['unmatched_loss'],
-            'focal_loss': loss_inst['focal_loss'],
+            'bce_loss': loss_inst['bce_loss'],
             'dice_loss': loss_inst['dice_loss'],
             'remap_info': remap_info
         }
@@ -412,10 +414,10 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch < 3:
-                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
-                    else:
-                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
+                    #if epoch < 3:
+                    #    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
+                    #else:
+                    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
                     loss = self._compute_loss(
                         semantic_output=semantic_output,
                         semantic_labels=semantic_labels,
@@ -424,7 +426,8 @@ class TreeProjectorTrainer:
                         offset_output=offset_output,
                         offset_labels=offset_labels,
                         instance_output=instance_output,
-                        instance_labels=instance_labels
+                        instance_labels=instance_labels,
+                        centroid_confidences=centroid_confidences_output
                     )
 
                 with torch.no_grad():
@@ -449,7 +452,7 @@ class TreeProjectorTrainer:
 
                     loss_trends = {
                         k: f"{v.item():.4f} {'→' if slopes[k] < 1e-4 and slopes[k] > -1e-4 else ('↑' if slopes[k] > 0 else '↓')}" for k, v in loss.items()
-                        for k, v in loss.items() if k not in ('remap_info', 'matched_loss', 'unmatched_loss', 'focal_loss', 'dice_loss')
+                        for k, v in loss.items() if k not in ('remap_info', 'matched_loss', 'unmatched_loss', 'bce_loss', 'dice_loss')
                     }
 
                     pbar.set_postfix({
@@ -471,7 +474,7 @@ class TreeProjectorTrainer:
                     self._writer.add_scalar('Train_Loss/5/Instance_loss', loss['instance_loss'].item(), step)
                     self._writer.add_scalar('Train_Loss/6/Matched_loss', loss['matched_loss'].item(), step)
                     self._writer.add_scalar('Train_Loss/7/Unmatched_loss', loss['unmatched_loss'].item(), step)
-                    self._writer.add_scalar('Train_Loss/8/Focal_loss', loss['focal_loss'].item(), step)
+                    self._writer.add_scalar('Train_Loss/8/Bce_loss', loss['bce_loss'].item(), step)
                     self._writer.add_scalar('Train_Loss/9/Dice_loss', loss['dice_loss'].item(), step)
                     self._writer.add_scalar('Train_Semantic/1/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
                     self._writer.add_scalar('Train_Semantic/2/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
@@ -522,7 +525,7 @@ class TreeProjectorTrainer:
                 'instance_loss': deque(maxlen=window_size)
             }
 
-            pbar = tqdm(self._train_loader, desc='[Val]', file=sys.stdout, dynamic_ncols=True, bar_format="{l_bar}{bar}{r_bar}\n{postfix}")
+            pbar = tqdm(self._val_loader, desc='[Val]', file=sys.stdout, dynamic_ncols=True, bar_format="{l_bar}{bar}{r_bar}\n{postfix}")
             for feed_dict in pbar:
                 inputs = feed_dict["inputs"].to(self._device)
                 semantic_labels = feed_dict["semantic_labels"].to(self._device)
@@ -550,7 +553,8 @@ class TreeProjectorTrainer:
                         offset_output=offset_output,
                         offset_labels=offset_labels,
                         instance_output=instance_output,
-                        instance_labels=instance_labels
+                        instance_labels=instance_labels,
+                        centroid_confidences=centroid_confidences_output
                     )
 
                 stat = self._compute_metrics(
@@ -574,10 +578,13 @@ class TreeProjectorTrainer:
 
                 loss_trends = {
                     k: f"{v.item():.4f} {'→' if slopes[k] < 1e-4 and slopes[k] > -1e-4 else ('↑' if slopes[k] > 0 else '↓')}" for k, v in loss.items()
-                    for k, v in loss.items() if k not in ('remap_info', 'matched_loss', 'unmatched_loss', 'focal_loss', 'dice_loss')
+                    for k, v in loss.items() if k not in ('remap_info', 'matched_loss', 'unmatched_loss', 'bce_loss', 'dice_loss')
                 }
 
                 pbar.set_postfix({
+                    'VRAM': f'{torch.cuda.memory_reserved(self._device) / (1024 ** 3):.2f} GB',
+                    'Matched': f"{stat['instances_matched']} / {stat['centroids_gt']}",
+                    'TP': f"{stat['tp']} / {stat['centroids_gt']}",
                     'Total': loss_trends['total_loss'],
                     'Semantic': loss_trends['semantic_loss'],
                     'Centroid': loss_trends['centroid_loss'],
@@ -593,7 +600,7 @@ class TreeProjectorTrainer:
                 self._writer.add_scalar('Val_Loss/5/Instance_loss', loss['instance_loss'].item(), step)
                 self._writer.add_scalar('Val_Loss/6/Matched_loss', loss['matched_loss'].item(), step)
                 self._writer.add_scalar('Val_Loss/7/Unmatched_loss', loss['unmatched_loss'].item(), step)
-                self._writer.add_scalar('Val_Loss/8/Focal_loss', loss['focal_loss'].item(), step)
+                self._writer.add_scalar('Val_Loss/8/Bce_loss', loss['bce_loss'].item(), step)
                 self._writer.add_scalar('Val_Loss/9/Dice_loss', loss['dice_loss'].item(), step)
                 self._writer.add_scalar('Val_Semantic/1/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
                 self._writer.add_scalar('Val_Semantic/2/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
