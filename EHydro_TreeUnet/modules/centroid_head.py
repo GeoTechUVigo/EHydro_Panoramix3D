@@ -22,7 +22,7 @@ class CentroidHead(nn.Module):
         ):
         super().__init__()
         self.decoder = FeatDecoder(decoder_blocks, 1, aux_dim=1, bias=True, init_bias=math.log(instance_density / (1 - instance_density)))
-        self.descriptor = FeatDecoder(decoder_blocks, descriptor_dim, bias=True)
+        # self.descriptor = FeatDecoder(decoder_blocks, descriptor_dim, bias=True)
 
         self.act = nn.Sigmoid()
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
@@ -78,7 +78,8 @@ class CentroidHead(nn.Module):
         centroid_scores.F = self.act(centroid_scores.F)
 
         peak_indices, centroid_confidences = self._find_centroid_peaks(centroid_scores if centroid_score_labels is None else centroid_score_labels)
-        centroid_descriptors = self.descriptor(feats, mask=mask.nonzero(as_tuple=False).squeeze(1)[peak_indices])
-        centroid_descriptors.F = centroid_confidences.F * F.normalize(centroid_descriptors.F, p=2, dim=1)
+        # centroid_descriptors = self.descriptor(feats, mask=mask.nonzero(as_tuple=False).squeeze(1)[peak_indices])
+        # centroid_descriptors.F = centroid_confidences.F * F.normalize(centroid_descriptors.F, p=2, dim=1)
 
-        return centroid_scores, centroid_descriptors, centroid_confidences
+        # return centroid_scores, centroid_descriptors, centroid_confidences
+        return centroid_scores, peak_indices, centroid_confidences

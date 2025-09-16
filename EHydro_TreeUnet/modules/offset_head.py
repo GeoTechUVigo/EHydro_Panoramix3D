@@ -18,7 +18,7 @@ class OffsetHead(nn.Module):
         super().__init__()
 
         self.decoder = FeatDecoder(decoder_blocks, 3, bias=True)
-        self.descriptor = FeatDecoder(decoder_blocks, descriptor_dim, bias=True)
+        #self.descriptor = FeatDecoder(decoder_blocks, descriptor_dim, bias=True)
 
     @torch.no_grad()
     def _revoxelize(self, offsets: SparseTensor) -> Tuple[SparseTensor, Tensor]:
@@ -45,7 +45,7 @@ class OffsetHead(nn.Module):
         offsets = self.decoder(feats, mask=mask)
         centroid_scores, inv_map = self._revoxelize(offsets if offset_labels is None else offset_labels)
 
-        cluster_descriptors = self.descriptor(feats, mask=mask, new_coords=centroid_scores.C, reduce=inv_map)
-        cluster_descriptors.F = F.normalize(cluster_descriptors.F, p=2, dim=1)
+        #cluster_descriptors = self.descriptor(feats, mask=mask, new_coords=centroid_scores.C, reduce=inv_map)
+        #cluster_descriptors.F = F.normalize(cluster_descriptors.F, p=2, dim=1)
         
-        return offsets, cluster_descriptors, centroid_scores, inv_map
+        return offsets, None, centroid_scores, inv_map
