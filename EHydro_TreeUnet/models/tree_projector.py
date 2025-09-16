@@ -34,8 +34,6 @@ class TreeProjector(nn.Module):
             in_channels=in_channels
         )
 
-        self.descriptor = FeatDecoder(resnet_blocks, descriptor_dim, bias=True)
-
         self.semantic_head = FeatDecoder(
             blocks=resnet_blocks,
             out_dim=num_classes,
@@ -55,7 +53,10 @@ class TreeProjector(nn.Module):
             centroid_thres=centroid_thres
         )
 
-        self.instance_head = InstanceHead()
+        self.instance_head = InstanceHead(
+            resnet_blocks=resnet_blocks,
+            descriptor_dim=descriptor_dim
+        )
 
     def forward(self, x: SparseTensor, semantic_labels: SparseTensor = None, centroid_score_labels: SparseTensor = None, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
         feats = self.encoder(x)
@@ -71,15 +72,7 @@ class TreeProjector(nn.Module):
         offsets, cluster_descriptors, centroid_scores_off, inv_map = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
         centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, centroid_scores_off, mask=ng_mask, centroid_score_labels=centroid_score_labels)
 
-        voxel_descriptors = self.descriptor(feats, mask=ng_mask)
-        voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
-
-        centroid_descriptors = SparseTensor(
-            coords=voxel_descriptors.C[peak_indices],
-            feats=voxel_descriptors.F[peak_indices] * centroid_confidences.F
-        )
-
-        instance_output = self.instance_head(voxel_descriptors, centroid_descriptors)
+        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask)
         #instance_output = self.instance_head(cluster_descriptors, centroid_descriptors)
         #instance_output.C = offsets.C
         #instance_output.F = instance_output.F.index_select(0, inv_map)

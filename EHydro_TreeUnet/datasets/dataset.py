@@ -63,6 +63,16 @@ class Dataset:
             select_columns = []
             if 'intensity' in self._feat_keys:
                 select_columns.append(np.array(file.norm_intensity)[:, None])
+            if 'x_norm' in self._feat_keys:
+                select_columns.append(np.array(file.x)[:, None])
+            if 'y_norm' in self._feat_keys:
+                select_columns.append(np.array(file.y)[:, None])
+            if 'z_norm' in self._feat_keys:
+                select_columns.append(np.array(file.z)[:, None])
+            if 'return_number' in self._feat_keys:
+                select_columns.append(np.array(file.return_number)[:, None])
+            if 'number_of_returns' in self._feat_keys:
+                select_columns.append(np.array(file.number_of_returns)[:, None])
 
             feats = np.hstack(select_columns)
 

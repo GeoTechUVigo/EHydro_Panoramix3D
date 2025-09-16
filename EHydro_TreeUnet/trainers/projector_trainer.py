@@ -44,6 +44,7 @@ class TreeProjectorTrainer:
             scale_range: Tuple[float, float] = (0.9, 1.1),
 
             training: bool = True,
+            test_lr: List[str] = [],
             epochs: int = 1,
             start_on_epoch: int = 0,
             batch_size: int = 1,
@@ -51,7 +52,11 @@ class TreeProjectorTrainer:
             centroid_loss_coef: float = 1.0,
             offset_loss_coef: float = 1.0,
             instance_loss_coef: float = 1.0,
-            lr: float = 1e-3,
+            backbone_lr: float = 1e-3,
+            semantic_lr: float = 1e-3,
+            offset_lr: float = 1e-3,
+            centroid_lr: float = 1e-3,
+            instance_lr: float = 1e-3,
 
             resnet_blocks: List[Tuple[int, int, Union[int, Tuple[int, int, int]], Union[int, Tuple[int, int, int]]]] = [
                 (3, 16, 3, 1),
@@ -111,7 +116,11 @@ class TreeProjectorTrainer:
         self._centroid_loss_coef = centroid_loss_coef
         self._offset_loss_coef = offset_loss_coef
         self._instance_loss_coef = instance_loss_coef
-        self._lr = lr
+        self._backbone_lr = backbone_lr
+        self._semantic_lr = semantic_lr
+        self._offset_lr = offset_lr
+        self._centroid_lr = centroid_lr
+        self._instance_lr = instance_lr
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
@@ -126,6 +135,7 @@ class TreeProjectorTrainer:
         self._metric_semantic_recall = Recall(task='multiclass', num_classes=self._dataset.num_classes, average='none').to(device=self._device)
         self._metric_semantic_f1 = F1Score(task='multiclass', num_classes=self._dataset.num_classes, average='none').to(device=self._device)
 
+        self._test_lr = test_lr
         self._epochs = epochs
         self._start_on_epoch = start_on_epoch
 
@@ -360,7 +370,19 @@ class TreeProjectorTrainer:
         return slope
 
     def train(self) -> None:
-        optimizer = torch.optim.Adam(self._model.parameters(), lr=self._lr)
+        init_lr = 1e-6
+        final_lr = 1.0
+        num_steps = len(self._train_loader)
+        lr_mult = (final_lr / init_lr) ** (1 / (num_steps))
+
+        optimizer = torch.optim.AdamW([
+            {'params': self._model.encoder.parameters(), 'lr': init_lr if 'backbone' in self._test_lr else self._backbone_lr},
+            {'params': self._model.semantic_head.parameters(), 'lr': init_lr if 'semantic' in self._test_lr else self._semantic_lr},
+            {'params': self._model.offset_head.parameters(), 'lr': init_lr if 'offset' in self._test_lr else self._offset_lr},
+            {'params': self._model.centroid_head.parameters(), 'lr': init_lr if 'centroid' in self._test_lr else self._centroid_lr},
+            {'params': self._model.instance_head.parameters(), 'lr': init_lr if 'instance' in self._test_lr else self._instance_lr}
+        ])
+
         scaler = amp.GradScaler(enabled=True)
         start_epoch = 0
         
@@ -388,7 +410,7 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'Version name: {self._version_name}')
             print(f'\n=== Starting epoch {epoch + 1} ===')
-            if epoch < 3:
+            if epoch < 1:
                 print('Training instance correlation with labels instead of predictions by now...\n')
             else:
                 print('Training instance correlation with predictions.\n')
@@ -414,10 +436,11 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    #if epoch < 3:
-                    #    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
-                    #else:
-                    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
+                    if epoch < 1:
+                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
+                    else:
+                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
+                    
                     loss = self._compute_loss(
                         semantic_output=semantic_output,
                         semantic_labels=semantic_labels,
@@ -490,6 +513,26 @@ class TreeProjectorTrainer:
                 scaler.scale(loss['total_loss']).backward()
                 scaler.step(optimizer)
                 scaler.update()
+
+                if 'backbone' in self._test_lr:
+                    optimizer.param_groups[0]['lr'] *= lr_mult
+                if 'semantic' in self._test_lr:
+                    optimizer.param_groups[2]['lr'] *= lr_mult
+                if 'offset' in self._test_lr:
+                    optimizer.param_groups[3]['lr'] *= lr_mult
+                if 'centroid' in self._test_lr:
+                    optimizer.param_groups[4]['lr'] *= lr_mult
+                if 'instance' in self._test_lr:
+                    optimizer.param_groups[5]['lr'] *= lr_mult
+
+                self._writer.add_scalar('Learning_rates/0/Backbone_learning_rate', optimizer.param_groups[0]['lr'], step)
+                self._writer.add_scalar('Learning_rates/1/Semantic_learning_rate', optimizer.param_groups[1]['lr'], step)
+                self._writer.add_scalar('Learning_rates/2/Offset_learning_rate', optimizer.param_groups[2]['lr'], step)
+                self._writer.add_scalar('Learning_rates/3/Centroid_learning_rate', optimizer.param_groups[3]['lr'], step)
+                self._writer.add_scalar('Learning_rates/4/Instance_learning_rate', optimizer.param_groups[4]['lr'], step)
+
+            if self._test_lr:
+                break
 
             torch.save({
                 'epoch': epoch,
