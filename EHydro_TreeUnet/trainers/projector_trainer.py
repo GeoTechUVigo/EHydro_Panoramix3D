@@ -517,13 +517,13 @@ class TreeProjectorTrainer:
                 if 'backbone' in self._test_lr:
                     optimizer.param_groups[0]['lr'] *= lr_mult
                 if 'semantic' in self._test_lr:
-                    optimizer.param_groups[2]['lr'] *= lr_mult
+                    optimizer.param_groups[1]['lr'] *= lr_mult
                 if 'offset' in self._test_lr:
-                    optimizer.param_groups[3]['lr'] *= lr_mult
+                    optimizer.param_groups[2]['lr'] *= lr_mult
                 if 'centroid' in self._test_lr:
-                    optimizer.param_groups[4]['lr'] *= lr_mult
+                    optimizer.param_groups[3]['lr'] *= lr_mult
                 if 'instance' in self._test_lr:
-                    optimizer.param_groups[5]['lr'] *= lr_mult
+                    optimizer.param_groups[4]['lr'] *= lr_mult
 
                 self._writer.add_scalar('Learning_rates/0/Backbone_learning_rate', optimizer.param_groups[0]['lr'], step)
                 self._writer.add_scalar('Learning_rates/1/Semantic_learning_rate', optimizer.param_groups[1]['lr'], step)
