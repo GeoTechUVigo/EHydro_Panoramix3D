@@ -102,7 +102,7 @@ class FocalLoss(nn.Module):
     
 
 class HungarianInstanceLoss(nn.Module):
-    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 0.5, lambda_bce: float = 1.0, lambda_dice: float = 1.0):
+    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 5.0, lambda_bce: float = 2.0, lambda_dice: float = 1.0):
         super().__init__()
 
         self._lambda_matched = lambda_matched
@@ -121,12 +121,14 @@ class HungarianInstanceLoss(nn.Module):
 
         gt_masks = (gt_labels.F.unsqueeze(0) == uniq.unsqueeze(1)).to(dtype=pred_logits.F.dtype)
 
+        num_matches = torch.unique(torch.argmax(pred_logits.F, dim=1)).size(0) if pred_logits.F.size(1) > 0 else 0
         losses = torch.zeros(5, device=pred_logits.F.device, dtype=pred_logits.F.dtype)
         global_remap_info = {
             'gt_indices': torch.empty(0, dtype=torch.int64, device=pred_logits.F.device),
             'pred_indices': torch.empty(0, dtype=torch.int64, device=pred_logits.F.device),
             'num_instances': uniq.size(0),
-            'num_predictions': pred_logits.F.size(1)
+            'num_predictions': pred_logits.F.size(1),
+            'num_matches': num_matches
         }
 
         for batch_idx in batch_indices:

@@ -76,8 +76,8 @@ class Dataset:
 
             feats = np.hstack(select_columns)
 
-            semantic_labels = np.array(file.semantic_pred)
-            instance_labels = np.array(file.instance_pred)
+            semantic_labels = np.array(file.semantic_gt)
+            instance_labels = np.array(file.instance_gt)
         else:
             raise ValueError(f'Unsopported file extension: {ext}!')
 

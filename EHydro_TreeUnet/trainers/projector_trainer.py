@@ -310,10 +310,10 @@ class TreeProjectorTrainer:
 
         tp_mask = iou >= iou_thresh
         tp = int(tp_mask.sum().item())
-        fp = remap_info['num_predictions'] - tp
+        fp = remap_info['num_matches'] - tp
         fn = remap_info['num_instances'] - tp
 
-        precision = tp / remap_info['num_predictions'] if remap_info['num_predictions'] > 0 else float('nan')
+        precision = tp / remap_info['num_matches'] if remap_info['num_matches'] > 0 else float('nan')
         recall = tp / remap_info['num_instances'] if remap_info['num_instances'] > 0 else float('nan')
         f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else float('nan')
 
@@ -351,7 +351,7 @@ class TreeProjectorTrainer:
             'centroids_gt': remap_info['num_instances'],
             'centroids_ratio': remap_info['num_predictions'] / remap_info['num_instances'] if remap_info['num_instances'] > 0 else float('nan'),
             'mean_centroid_confidence': centroid_confidences.F.mean().item() if centroid_confidences.F.numel() > 0 else float('nan'),
-            'instances_matched': len(torch.unique(instance_output.F.argmax(dim=1))) if instance_output.F.size(1) > 0 else 0,
+            'instances_matched': remap_info['num_matches'],
             'tp': instance_tp,
             'fp': instance_fp,
             'fn': instance_fn,
