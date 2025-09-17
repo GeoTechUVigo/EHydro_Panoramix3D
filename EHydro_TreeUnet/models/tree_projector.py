@@ -68,11 +68,10 @@ class TreeProjector(nn.Module):
             semantic_labels = semantic_labels.F
 
         ng_mask = (semantic_labels != 0)
-        #offsets, cluster_descriptors, centroid_scores_off, inv_map = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
-        offsets, cluster_descriptors, centroid_scores_off, inv_map = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
+        offsets, centroid_scores_off, inv_map = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
         centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, centroid_scores_off, mask=ng_mask, centroid_score_labels=centroid_score_labels)
 
-        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask)
+        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, inv_map)
         #instance_output = self.instance_head(cluster_descriptors, centroid_descriptors)
         #instance_output.C = offsets.C
         #instance_output.F = instance_output.F.index_select(0, inv_map)

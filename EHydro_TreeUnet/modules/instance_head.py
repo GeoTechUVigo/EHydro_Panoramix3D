@@ -5,8 +5,9 @@ import torchsparse.nn.functional as spf
 
 from typing import List, Tuple, Union
 
-from torch import nn, Tensor
+from torch import nn, Tensor, cat
 from torchsparse import nn as spnn, SparseTensor
+from torch_scatter import scatter_mean
 
 from ..modules import FeatDecoder
 
@@ -25,10 +26,45 @@ class InstanceHead(nn.Module):
         super().__init__()
 
         self.descriptor = FeatDecoder(resnet_blocks, descriptor_dim, bias=True)
+        self.descriptor_conv = spnn.Conv3d(
+            in_channels=descriptor_dim * 2,
+            out_channels=descriptor_dim,
+            kernel_size=3,
+            bias=True
+        )
 
-    def forward(self, feats: List[SparseTensor], peak_indices: Tensor, centroid_confidences: SparseTensor, ng_mask: Tensor) -> SparseTensor:
+        self.descriptor_conv_2d = nn.Sequential(
+            nn.Conv2d(
+                in_channels=descriptor_dim * 2,
+                out_channels=descriptor_dim,
+                kernel_size=1,
+                bias=False
+            ),
+            nn.BatchNorm2d(descriptor_dim),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                in_channels=descriptor_dim,
+                out_channels=descriptor_dim,
+                kernel_size=1,
+                bias=False
+            )
+        )
+
+    def forward(self,
+            feats: List[SparseTensor],
+            peak_indices: Tensor,
+            centroid_confidences: SparseTensor,
+            ng_mask: Tensor,
+            cluster_map: Tensor
+        ) -> SparseTensor:
         voxel_descriptors = self.descriptor(feats, mask=ng_mask)
-        voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
+        # voxel_descriptors.F = F.normalize(voxel_descriptors.F, p=2, dim=1)
+        cluster_feats = scatter_mean(voxel_descriptors.F, cluster_map, dim=0)
+        cluster_feats = cluster_feats.index_select(0, cluster_map)
+        voxel_descriptors.F = cluster_feats
+        #voxel_descriptors.F = cat([voxel_descriptors.F, cluster_feats], dim=1)
+        #voxel_descriptors = self.descriptor_conv(voxel_descriptors)
+
 
         centroid_descriptors = SparseTensor(
             coords=voxel_descriptors.C[peak_indices],
@@ -51,19 +87,27 @@ class InstanceHead(nn.Module):
             if not centroid_mask.any():
                 continue
 
-            with torch.no_grad():
-                batch_dists = (voxel_descriptors.C[voxel_mask, 1:][:, None, :] - centroid_descriptors.C[centroid_mask, 1:][None, :, :]).to(voxel_descriptors.F.dtype)
-                batch_dists = torch.norm(batch_dists, p=2, dim=-1).clamp(min=0.1)
-                attention_weights = F.softmax(-batch_dists, dim=-1)
-            
+            #with torch.no_grad():
+            #    batch_dists = (voxel_descriptors.C[voxel_mask, 1:][:, None, :] - centroid_descriptors.C[centroid_mask, 1:][None, :, :]).to(voxel_descriptors.F.dtype)
+            #    batch_dists = torch.norm(batch_dists, p=2, dim=-1).clamp(min=0.1)
+            #    attention_weights = F.softmax(-batch_dists, dim=-1)
+
+            batch_voxel_descriptors = voxel_descriptors.F[voxel_mask]
             batch_centroid_descriptors = centroid_descriptors.F[centroid_mask]
-            batch_output = ((voxel_descriptors.F[voxel_mask] @ batch_centroid_descriptors.T) * attention_weights).clamp(min=-10, max=10)
+
+            batch_voxel_descriptors_exp = batch_voxel_descriptors.unsqueeze(1).expand(-1, batch_centroid_descriptors.size(0), -1)
+            batch_centroid_descriptors_exp = batch_centroid_descriptors.unsqueeze(0).expand(batch_voxel_descriptors.size(0), -1, -1)
+            batch_input = torch.cat([batch_voxel_descriptors_exp, batch_centroid_descriptors_exp], dim=-1).permute(2, 0, 1).contiguous().unsqueeze(0)
+            batch_output = self.descriptor_conv_2d(batch_input)
+
+            #batch_output = ((voxel_descriptors.F[voxel_mask] @ batch_centroid_descriptors.T) * attention_weights).clamp(min=-10, max=10)
+            #batch_output = ((voxel_descriptors.F[voxel_mask] @ batch_centroid_descriptors.T)).clamp(min=-10, max=10)
             #print(f'max output: {batch_output.max().item():.4f}, min output: {batch_output.min().item():.4f}')
 
             rows = voxel_mask.nonzero(as_tuple=False)
             cols = centroid_mask.nonzero(as_tuple=False).squeeze(1)
 
-            output_features[rows, cols] = batch_output.to(output_features.dtype)
+            output_features[rows, cols] = batch_output[0, 0, :, :].to(output_features.dtype)
 
         return SparseTensor(coords=voxel_descriptors.C, feats=output_features)
         

@@ -83,8 +83,9 @@ class FeatDecoder(nn.Module):
             current = self.conv[i](current)
         
         if mask is not None:
-            current.C = current.C[mask]
-            current.F = current.F[mask]
+            #current.C = current.C[mask]
+            #current.F = current.F[mask]
+            current = SparseTensor(coords=current.C[mask], feats=current.F[mask])
             
         if aux is not None:
             current = self._union_sparse_layers(current, aux)

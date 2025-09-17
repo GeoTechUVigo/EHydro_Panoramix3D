@@ -22,12 +22,10 @@ class CentroidHead(nn.Module):
         ):
         super().__init__()
         self.decoder = FeatDecoder(decoder_blocks, 1, aux_dim=1, bias=True, init_bias=math.log(instance_density / (1 - instance_density)))
-        # self.descriptor = FeatDecoder(decoder_blocks, descriptor_dim, bias=True)
 
         self.act = nn.Sigmoid()
         self.max_pool = SparseMaxPool(3, kernel_size=3, stride=1, padding=1, subm=True)
-        # self.avg_pool = SparseAvgPool(3, kernel_size=3, stride=1, padding=1, subm=True)
-
+        
         self._score_threshold = score_thres
         self._centroid_threshold = centroid_thres
     
@@ -44,17 +42,6 @@ class CentroidHead(nn.Module):
             spatial_shape=tuple((centroid_scores.C[:, 1:].max(0).values + 1).tolist()),
             batch_size=int(centroid_scores.C[:,0].max().item()) + 1
         )
-
-        '''
-        cluster_descriptors_spconv = SparseConvTensor(
-            features=cluster_descriptors.F,
-            indices=cluster_descriptors.C,
-            spatial_shape=tuple((cluster_descriptors.C[:, 1:].max(0).values + 1).tolist()),
-            batch_size=int(cluster_descriptors.C[:,0].max().item()) + 1
-        )
-
-        cluster_descriptors_spconv = self.avg_pool(cluster_descriptors_spconv)
-        '''
 
         hmax = self.max_pool(centroid_scores_spconv)
         peak_mask = (hmax.features[:, 0] == centroid_scores_spconv.features[:, 0]) & (centroid_scores_spconv.features[:, 0] > self._centroid_threshold)
@@ -78,8 +65,4 @@ class CentroidHead(nn.Module):
         centroid_scores.F = self.act(centroid_scores.F)
 
         peak_indices, centroid_confidences = self._find_centroid_peaks(centroid_scores if centroid_score_labels is None else centroid_score_labels)
-        # centroid_descriptors = self.descriptor(feats, mask=mask.nonzero(as_tuple=False).squeeze(1)[peak_indices])
-        # centroid_descriptors.F = centroid_confidences.F * F.normalize(centroid_descriptors.F, p=2, dim=1)
-
-        # return centroid_scores, centroid_descriptors, centroid_confidences
         return centroid_scores, peak_indices, centroid_confidences

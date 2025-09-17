@@ -102,7 +102,7 @@ class FocalLoss(nn.Module):
     
 
 class HungarianInstanceLoss(nn.Module):
-    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 0.2, lambda_bce: float = 1.0, lambda_dice: float = 0.5):
+    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 0.5, lambda_bce: float = 1.0, lambda_dice: float = 1.0):
         super().__init__()
 
         self._lambda_matched = lambda_matched

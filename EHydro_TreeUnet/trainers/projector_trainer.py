@@ -57,6 +57,7 @@ class TreeProjectorTrainer:
             offset_lr: float = 1e-3,
             centroid_lr: float = 1e-3,
             instance_lr: float = 1e-3,
+            weight_decay: float = 0.01,
 
             resnet_blocks: List[Tuple[int, int, Union[int, Tuple[int, int, int]], Union[int, Tuple[int, int, int]]]] = [
                 (3, 16, 3, 1),
@@ -121,6 +122,7 @@ class TreeProjectorTrainer:
         self._offset_lr = offset_lr
         self._centroid_lr = centroid_lr
         self._instance_lr = instance_lr
+        self._weight_decay = weight_decay
 
         self._criterion_semantic = nn.CrossEntropyLoss()
         self._criterion_centroid = FocalLoss()
@@ -381,7 +383,7 @@ class TreeProjectorTrainer:
             {'params': self._model.offset_head.parameters(), 'lr': init_lr if 'offset' in self._test_lr else self._offset_lr},
             {'params': self._model.centroid_head.parameters(), 'lr': init_lr if 'centroid' in self._test_lr else self._centroid_lr},
             {'params': self._model.instance_head.parameters(), 'lr': init_lr if 'instance' in self._test_lr else self._instance_lr}
-        ])
+        ], weight_decay=self._weight_decay)
 
         scaler = amp.GradScaler(enabled=True)
         start_epoch = 0
@@ -410,10 +412,10 @@ class TreeProjectorTrainer:
         for epoch in epoch_iter:
             print(f'Version name: {self._version_name}')
             print(f'\n=== Starting epoch {epoch + 1} ===')
-            if epoch < 1:
-                print('Training instance correlation with labels instead of predictions by now...\n')
-            else:
-                print('Training instance correlation with predictions.\n')
+            #if epoch < 1:
+            #    print('Training instance correlation with labels instead of predictions by now...\n')
+            #else:
+            #    print('Training instance correlation with predictions.\n')
 
             pbar = tqdm(self._train_loader, desc='[Train]', file=sys.stdout, dynamic_ncols=True)
             for feed_dict in pbar:
@@ -436,10 +438,10 @@ class TreeProjectorTrainer:
                 optimizer.zero_grad()
     
                 with amp.autocast(enabled=True):
-                    if epoch < 1:
-                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
-                    else:
-                        semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
+                    #if epoch < 1:
+                    #    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels, centroid_score_labels, offset_labels)
+                    #else:
+                    semantic_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
                     
                     loss = self._compute_loss(
                         semantic_output=semantic_output,
