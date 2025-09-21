@@ -1,0 +1,36 @@
+root: /home/samuel/Panoramix3D_data
+version_name: 'Panoramix3D_base_V1'
+mode: 'train'
+batch_size: 8
+train_schedule:
+  - epochs: 1
+    lr_scale: 1.0
+    freeze_modules: ['instance']
+  - epochs: 5
+    lr_scale: 1.0
+    freeze_modules: []
+  - epochs: 5
+    lr_scale: 0.1
+    freeze_modules: []
+  - epochs: 5
+    lr_scale: 0.01
+    freeze_modules: []
+start_epoch: 0
+num_workers: 4
+weight_decay: 0.04
+loss_coeffs:
+  semantic_loss_coeff: 2.0
+  centroid_loss_coeff: 1.0
+  offset_loss_coeff: 1.0
+  offset_smooth_l1_beta_loss_coef: 5.0
+  instance_loss_coeff: 1.0
+  instance_matched_loss_coeff: 1.0
+  instance_unmatched_loss_coeff: 7.0
+  instance_bce_loss_coeff: 2.0
+  instance_dice_loss_coeff: 1.0
+learning_rates:
+  backbone: 2e-3
+  semantic: 1e-3
+  offset: 2e-2
+  centroid: 1e-3
+  instance: 2e-2

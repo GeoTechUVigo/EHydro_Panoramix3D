@@ -185,3 +185,7 @@ ScreenCapture*.png
 ScreenCamera*.json
 DepthCamera*.json
 RenderOption*.json
+
+# VS Code
+.vscode/
+.github/

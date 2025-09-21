@@ -1,0 +1,1 @@
+from .panoramix3D_trainer import Panoramix3DTrainer

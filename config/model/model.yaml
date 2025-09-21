@@ -1,0 +1,22 @@
+weights_file: null
+backbone:
+  resnet_blocks:
+    - [3, 16, 3, 1]
+    - [3, 32, 3, 2]
+    - [3, 64, 3, 2]
+    - [3, 128, 3, 2]
+    - [1, 128, [1, 1, 3], [1, 1, 2]]
+
+  in_channels: 1
+
+semantic_head:
+  num_classes: 3
+
+centroid_head:
+  instance_density: 0.01
+  score_thres: 0.2
+  centroid_thres: 0.3
+  max_instances_per_scene: 64
+
+instance_head:
+  descriptor_dim: 16
