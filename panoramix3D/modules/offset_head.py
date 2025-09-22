@@ -6,6 +6,7 @@ from typing import List, Tuple, Union
 
 from torch import nn, Tensor, cat
 from torchsparse import SparseTensor
+from torch_scatter import scatter_mean
 
 from . import FeatDecoder
 
@@ -76,14 +77,25 @@ class OffsetHead(nn.Module):
 
         new_coords = offsets.C + offsets_
 
-        pc_hash        = spf.sphash(new_coords)
-        voxel_hash     = torch.unique(pc_hash)
-        idx_query      = spf.sphashquery(pc_hash, voxel_hash)
-        idx_query_long = idx_query.to(torch.int64)
+        pc_hash = spf.sphash(new_coords)
+        _, idx_query_long = torch.unique(pc_hash, return_inverse=True)
+        out_coords = scatter_mean(new_coords.float(), idx_query_long, dim=0).int()
+
+        return out_coords, idx_query_long
+        
+        '''
+        idx_query = idx_query_long.to(torch.int32)
+
+        #idx_query      = spf.sphashquery(pc_hash, voxel_hash)
         counts         = spf.spcount(idx_query, voxel_hash.numel())
         out_coords     = spf.spvoxelize(new_coords.float(), idx_query, counts).int()
 
+        out_hash = spf.sphash(out_coords)
+        perm = spf.sphashquery(voxel_hash, out_hash)
+        out_coords = out_coords[perm]
+
         return out_coords, idx_query_long
+        '''
 
     def forward(self, feats: List[SparseTensor], mask: Tensor, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, Tensor, Tensor]:
         """

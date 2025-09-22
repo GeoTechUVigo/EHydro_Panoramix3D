@@ -188,6 +188,7 @@ class HungarianInstanceLoss(nn.Module):
             - The unmatched term penalizes predictions that remain unassigned
               after Hungarian matching, using a sigmoid focal loss against zeros.
         """
+        pred_logits.F = pred_logits.F.clamp(min=-10, max=10)
 
         batch_indices = torch.unique(pred_logits.C[:, 0])
         uniq, inv = torch.unique(gt_labels.F, return_inverse=True)

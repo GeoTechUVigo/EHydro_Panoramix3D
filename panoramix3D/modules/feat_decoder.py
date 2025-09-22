@@ -124,7 +124,7 @@ class FeatDecoder(nn.Module):
         
         return SparseTensor(coords=A.C, feats=cat((A.F, outB.to(A.F.dtype)), dim=1))
 
-    def forward(self, x: List[SparseTensor], aux: SparseTensor = None, mask: Tensor = None) -> SparseTensor:
+    def forward(self, x: List[SparseTensor], aux: SparseTensor = None, mask: Tensor = None, reduce: Tensor = None, new_coords: Tensor = None) -> SparseTensor:
         """
         Forward pass through the multi-scale decoder.
 
@@ -159,6 +159,9 @@ class FeatDecoder(nn.Module):
             
         if aux is not None:
             current = self._union_sparse_layers(current, aux)
+
+        if reduce is not None and new_coords is not None:
+            current = SparseTensor(coords=new_coords, feats=scatter_mean(current.F, reduce, dim=0))
 
         return self.proj(current)
     

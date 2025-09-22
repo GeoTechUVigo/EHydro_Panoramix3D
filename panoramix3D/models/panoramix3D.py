@@ -135,7 +135,7 @@ class Panoramix3D(nn.Module):
         ng_mask = (semantic_labels != 0)
         offsets, cluster_coords, inv_map = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
         centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, mask=ng_mask, centroid_score_labels=centroid_score_labels)
-        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, cluster_coords, inv_map)
+        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, offsets.C, cluster_coords, inv_map)
 
         return semantic_output, centroid_scores, offsets, centroid_confidences, instance_output
 

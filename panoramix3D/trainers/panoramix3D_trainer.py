@@ -665,7 +665,6 @@ class Panoramix3DTrainer:
             pin_memory=True
         )
 
-        self._model.train()
         train_schedule = []
         for stage in self._cfg.trainer.train_schedule:
             train_schedule.extend([stage] * stage.epochs)
@@ -673,6 +672,7 @@ class Panoramix3DTrainer:
         epochs = len(train_schedule)
         epoch_iter = range(self._cfg.trainer.start_epoch, epochs)
         for epoch in epoch_iter:
+            self._model.train()
             lr_scale = train_schedule[epoch].lr_scale
             freeze_modules = train_schedule[epoch].freeze_modules
 
