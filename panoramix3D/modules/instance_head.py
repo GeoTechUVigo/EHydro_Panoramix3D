@@ -61,7 +61,7 @@ class InstanceHead(nn.Module):
                 kernel_size=3,
                 bias=False
             ),
-            spnn.BatchNorm(descriptor_dim),
+            # spnn.BatchNorm(descriptor_dim),
             spnn.ReLU(inplace=True)
         )
 
@@ -80,6 +80,15 @@ class InstanceHead(nn.Module):
                 bias=True
             )
         )
+
+    @torch.no_grad()
+    def _log_inf_or_nan(self, tensor: Tensor, name: str):
+        if torch.isinf(tensor).any():
+            print(f"{name} contains Inf values")
+        if torch.isneginf(tensor).any():
+            print(f"{name} contains -Inf values")
+        if torch.isnan(tensor).any():
+            print(f"{name} contains NaN values")
 
     def forward(self,
             feats: List[SparseTensor],
@@ -118,11 +127,34 @@ class InstanceHead(nn.Module):
             - Logits are clamped to [-10, 10]
             - Processing is done independently per batch to handle variable centroid counts and mitigate memory usage
         """
+        #print(f'Num of params: {sum(p.numel() for p in self.descriptor.parameters())} in descriptor')
+        #print(f'mean weight: {torch.mean(torch.cat([p.view(-1) for p in self.descriptor.parameters()]))}, std: {torch.std(torch.cat([p.view(-1) for p in self.descriptor.parameters()]))}')
+        for n, p in self.descriptor_conv.named_parameters():
+            if torch.isnan(p).any() or torch.isinf(p).any() or torch.isneginf(p).any():
+                print(f"Descriptor conv parameter {n} contains NaN or Inf")
+
+        for n, b in self.descriptor_conv.named_buffers():
+            if torch.isnan(b).any() or torch.isinf(b).any():
+                print(f"[BUFFER PROBLEM] {n} tiene NaN/Inf, min={b.min()}, max={b.max()}")
+
         voxel_descriptors = self.descriptor(feats, mask=ng_mask)
+        self._log_inf_or_nan(voxel_descriptors.F, 'Voxel descriptors')
+        #print(f'min voxel descriptor {voxel_descriptors.F.min()}, max: {voxel_descriptors.F.max()}, mean: {voxel_descriptors.F.mean()}, shape: {voxel_descriptors.F.shape}')
+
         cluster_descriptors = scatter_mean(voxel_descriptors.F, cluster_map, dim=0)
+        self._log_inf_or_nan(cluster_descriptors, 'Cluster descriptors filt')
+
         cluster_descriptors = cluster_descriptors.index_select(0, cluster_map)
+        self._log_inf_or_nan(cluster_descriptors, 'Cluster descriptors remap')
+        #print(f'min cluster descriptor {cluster_descriptors.min()}, max: {cluster_descriptors.max()}, mean: {cluster_descriptors.mean()}, shape: {cluster_descriptors.shape}')
         voxel_descriptors.F = cat([voxel_descriptors.F, cluster_descriptors], dim=1)
+        self._log_inf_or_nan(voxel_descriptors.F, 'Voxel descriptors cat')
+        #print(f'min voxel descriptor cat {voxel_descriptors.F.min()}, max: {voxel_descriptors.F.max()}, mean: {voxel_descriptors.F.mean()}, shape: {voxel_descriptors.F.shape}')
+
         voxel_descriptors = self.descriptor_conv(voxel_descriptors)
+            
+        self._log_inf_or_nan(voxel_descriptors.F, 'Final voxel descriptors')
+        #print(f'min final voxel descriptor {voxel_descriptors.F.min()}, max: {voxel_descriptors.F.max()}, mean: {voxel_descriptors.F.mean()}, shape: {voxel_descriptors.F.shape}')
         del cluster_descriptors
 
         cluster_coords = cluster_coords.index_select(0, cluster_map)
@@ -153,20 +185,18 @@ class InstanceHead(nn.Module):
             with torch.no_grad():
                 batch_cluster_dists = (cluster_coords[voxel_mask][:, 1:][:, None, :] - centroid_descriptors.C[centroid_mask][:, 1:][None, :, :]).to(voxel_descriptors.F.dtype)
                 batch_cluster_dists = torch.log1p(torch.norm(batch_cluster_dists, p=2, dim=-1).clamp(min=1)).unsqueeze(-1)
+                self._log_inf_or_nan(batch_cluster_dists, 'Cluster dists')
 
                 batch_voxel_dists = (voxel_descriptors.C[voxel_mask][:, 1:][:, None, :] - centroid_descriptors.C[centroid_mask][:, 1:][None, :, :]).to(voxel_descriptors.F.dtype)
                 batch_voxel_dists = torch.log1p(torch.norm(batch_voxel_dists, p=2, dim=-1).clamp(min=1)).unsqueeze(-1)
+                self._log_inf_or_nan(batch_voxel_dists, 'Voxel dists')
 
             batch_voxel_descriptors_exp = batch_voxel_descriptors.unsqueeze(1).expand(-1, batch_centroid_descriptors.size(0), -1)
             batch_centroid_descriptors_exp = batch_centroid_descriptors.unsqueeze(0).expand(batch_voxel_descriptors.size(0), -1, -1)
-            if torch.isinf(batch_voxel_descriptors_exp).any() or torch.isneginf(batch_voxel_descriptors_exp).any() or torch.isnan(batch_voxel_descriptors_exp).any():
-                print(f'¡Hay nans en batch_voxel_descriptors_exp!')
-            if torch.isinf(batch_centroid_descriptors_exp).any() or torch.isneginf(batch_centroid_descriptors_exp).any() or torch.isnan(batch_centroid_descriptors_exp).any():
-                print(f'¡Hay nans en batch_centroid_descriptors_exp!')
-            if torch.isinf(batch_cluster_dists).any() or torch.isneginf(batch_cluster_dists).any() or torch.isnan(batch_cluster_dists).any():
-                print(f'¡Hay nans en batch_cluster_dists!')
-            if torch.isinf(batch_voxel_dists).any() or torch.isneginf(batch_voxel_dists).any() or torch.isnan(batch_voxel_dists).any():
-                print(f'¡Hay nans en batch_voxel_dists!')
+            self._log_inf_or_nan(batch_voxel_descriptors, 'Batch voxel descriptors')
+            self._log_inf_or_nan(batch_centroid_descriptors_exp, 'Batch centroid descriptors expanded')
+            self._log_inf_or_nan(batch_centroid_descriptors, 'Batch centroid descriptors')
+            self._log_inf_or_nan(batch_centroid_descriptors_exp, 'Batch centroid descriptors expanded')
 
             del batch_voxel_descriptors, batch_centroid_descriptors
 
@@ -177,8 +207,7 @@ class InstanceHead(nn.Module):
                 batch_cluster_dists
             ], dim=-1).permute(2, 0, 1).contiguous().unsqueeze(0))[0, 0, :, :].to(output_features.dtype)
 
-            if torch.isnan(batch_output).any():
-                print(f'¡Hay nans en batch_output!')
+            self._log_inf_or_nan(batch_output, 'Batch output')
 
             rows = voxel_mask.nonzero(as_tuple=False)
             cols = centroid_mask.nonzero(as_tuple=False).squeeze(1)

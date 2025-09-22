@@ -140,7 +140,7 @@ class HungarianInstanceLoss(nn.Module):
         >>> print(remap.keys())
         dict_keys(['gt_indices', 'pred_indices', 'num_instances', 'num_predictions', 'num_matches'])
     """
-    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 7.0, lambda_bce: float = 2.0, lambda_dice: float = 1.0):
+    def __init__(self, lambda_matched: float = 1.0, lambda_unmatched: float = 1.0, lambda_bce: float = 1.0, lambda_dice: float = 1.0):
         super().__init__()
 
         self._lambda_matched = lambda_matched
@@ -242,8 +242,7 @@ class HungarianInstanceLoss(nn.Module):
                 gamma=2.0,
                 reduction='mean'
             )) if unmatched_logits.numel() > 0 else torch.tensor(0.0, device=pred_logits.F.device, dtype=pred_logits.F.dtype)
-            #unmatched_loss = self._lambda_unmatched * sigmoid_ce_loss_jit(unmatched_logits, torch.zeros_like(unmatched_logits), num_masks=unmatched_logits.size(0))
-            
+
             total_loss = matched_loss + unmatched_loss
 
             losses[0] += total_loss

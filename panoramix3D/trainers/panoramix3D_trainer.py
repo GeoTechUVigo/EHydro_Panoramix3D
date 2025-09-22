@@ -1,17 +1,20 @@
-import itertools
 import shutil
 import torch
 import sys
+import matplotlib.pyplot as plt
+import open3d as o3d
 
 import torchsparse
 import numpy as np
 
-from typing import List, Optional, Dict, Iterator, Tuple, Union, Deque
+from typing import Dict
 from collections import deque
+
+from open3d.visualization.tensorboard_plugin import summary
+from open3d.visualization.tensorboard_plugin.util import to_dict_batch
 
 from torch import nn, Tensor
 from torch.cuda import amp
-from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from torchmetrics.classification import MulticlassJaccardIndex, BinaryJaccardIndex, Precision, Recall, F1Score
@@ -64,7 +67,7 @@ class Panoramix3DTrainer:
             raise FileNotFoundError(f"Root folder {root_folder} does not exist.")
         
         self._root_folder = root_folder / self._cfg.trainer.version_name
-        if self._cfg.trainer.mode == 'train' and self._root_folder.exists():
+        if self._cfg.trainer.mode == 'train' and self._cfg.trainer.start_epoch == 0 and self._root_folder.exists():
             shutil.rmtree(self._root_folder)
 
         self._weights_folder = self._root_folder / 'weights'
@@ -319,7 +322,7 @@ class Panoramix3DTrainer:
         recall = tp / remap_info['num_instances'] if remap_info['num_instances'] > 0 else float('nan')
         f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else float('nan')
 
-        return tp, fp, fn, precision, recall, f1_score
+        return tp, fp, fn, iou.mean(), precision, recall, f1_score
 
     @torch.no_grad()    
     def _compute_metrics(
@@ -348,7 +351,7 @@ class Panoramix3DTrainer:
         """
 
         semantic_iou, semantic_precision, semantic_recall, semantic_f1 = self._compute_semantic_metrics(semantic_output, semantic_labels)
-        instance_tp, instance_fp, instance_fn, instance_precision, instance_recall, instance_f1 = self._compute_instance_metrics(
+        instance_tp, instance_fp, instance_fn, iou, instance_precision, instance_recall, instance_f1 = self._compute_instance_metrics(
             instance_output,
             instance_labels,
             iou_thresh=0.5,
@@ -372,32 +375,11 @@ class Panoramix3DTrainer:
             'tp': instance_tp,
             'fp': instance_fp,
             'fn': instance_fn,
+            'instance_iou': iou.item(),
             'instance_precision': instance_precision,
             'instance_recall': instance_recall,
             'instance_f1': instance_f1
         }
-    
-    @torch.no_grad()
-    def _compute_slope(self, values: deque, x_range: Optional[np.ndarray] = None) -> float:
-        """
-        Compute the linear regression slope of a sequence of values for trend analysis.
-        Useful for monitoring training convergence and learning rate scheduling.
-        
-        Args:
-            values: Deque of numerical values to analyze
-            x_range: Optional x-axis values; defaults to sequential indices
-            
-        Returns:
-            Linear regression slope coefficient
-        """
-        if len(values) < 2:
-            return 0.0
-        
-        y = np.array(values)
-        x = x_range if x_range is not None else np.arange(len(values))
-        A = np.vstack([x, np.ones(len(x))]).T
-        slope, _ = np.linalg.lstsq(A, y, rcond=None)[0]
-        return slope
     
     def _forward_pass(self, feed_dict: dict, training: bool):
         """
@@ -469,6 +451,7 @@ class Panoramix3DTrainer:
             'stat': stat
         }
 
+    @torch.no_grad()
     def _log_stats(self, loss: Dict, stat: Dict, step: int, prefix: str) -> None:
         """
         Log all training and validation metrics to TensorBoard for monitoring
@@ -504,6 +487,164 @@ class Panoramix3DTrainer:
         self._writer.add_scalar(f'{prefix}_Learning_Rate/3/Offset_LR', self._optimizer.param_groups[2]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/4/Centroid_LR', self._optimizer.param_groups[3]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/5/Instance_LR', self._optimizer.param_groups[4]['lr'], step)
+
+    @torch.no_grad()
+    def _log_mean_stats(self, step: int, stats: dict) -> None:
+        header = '| Class | IoU | Precision | Recall | F1 |\n|-|-|-|-|-|\n'
+        row = f'| Terrain | {stats["semantic_iou"][0]:.3f} | {stats["semantic_precision"][0]:.3f} | {stats["semantic_recall"][0]:.3f} | {stats["semantic_f1"][0]:.3f} |\n'
+        row += f'| Stem | {stats["semantic_iou"][1]:.3f} | {stats["semantic_precision"][1]:.3f} | {stats["semantic_recall"][1]:.3f} | {stats["semantic_f1"][1]:.3f} |\n'
+        row += f'| Canopy | {stats["semantic_iou"][2]:.3f} | {stats["semantic_precision"][2]:.3f} | {stats["semantic_recall"][2]:.3f} | {stats["semantic_f1"][2]:.3f} |\n'
+
+        self._writer.add_text('Val_Semantic/Mean_Results', header + row, step)
+
+        header = 'IoU | Precision | Recall | F1 |\n|-|-|-|-|\n'
+        row = f'{stats["instance_iou"]:.3f} | {stats["instance_precision"]:.3f} | {stats["instance_recall"]:.3f} | {stats["instance_f1"]:.3f} |\n'
+
+        self._writer.add_text('Val_Instance/Mean_Results', header + row, step)
+
+    @torch.no_grad()
+    def _log_pointclouds(self, step: int, result: dict) -> None:
+        pcd_gt = o3d.geometry.PointCloud()
+        pcd_pred = o3d.geometry.PointCloud()
+
+        batch_idx = result['semantic_output'].C.cpu().numpy()[:, 0]
+        centroid_batch_idx = result['centroid_confidences_output'].C.cpu().numpy()[:, 0]
+
+        voxels = result['semantic_output'].C.cpu().numpy()[:, 1:]
+        centroid_voxels = result['centroid_confidences_output'].C.cpu().numpy()[:, 1:]
+
+        semantic_output = torch.argmax(result['semantic_output'].F.cpu(), dim=1).numpy()
+        semantic_labels = result['semantic_labels'].F.cpu().numpy()
+
+        semantic_mask = semantic_labels != 0
+        centroid_score_output = np.zeros((voxels.shape[0], 1), dtype=float)
+        centroid_score_output[semantic_mask] = result['centroid_score_output'].F.cpu().numpy()
+        centroid_score_labels = np.zeros((voxels.shape[0], 1), dtype=float)
+        centroid_score_labels[semantic_mask] = result['centroid_score_labels'].F.cpu().numpy()
+
+        centroid_confidence_output = result['centroid_confidences_output'].F.cpu().numpy()
+
+        offset_output = np.zeros((voxels.shape[0], 3), dtype=float)
+        offset_output[semantic_mask] = result['offset_output'].F.cpu().numpy()
+        offset_labels = np.zeros((voxels.shape[0], 3), dtype=float)
+        offset_labels[semantic_mask] = result['offset_labels'].F.cpu().numpy()
+
+        instance_output_tmp = torch.argmax(result['instance_output'].F.cpu(), dim=1).numpy()
+        instance_output = np.full(voxels.shape[0], fill_value=-1, dtype=int)
+        instance_output[semantic_mask] = instance_output_tmp
+
+        gt_indices = result['loss']['remap_info']['gt_indices'].cpu().numpy()
+        pred_indices = result['loss']['remap_info']['pred_indices'].cpu().numpy()
+        num_instances = result['loss']['remap_info']['num_instances']
+
+        lut = np.full(num_instances, fill_value=-1, dtype=int)
+        lut[gt_indices] = pred_indices
+
+        start = pred_indices.max() + 1 if pred_indices.size else 0
+        unmatched = np.setdiff1d(np.arange(num_instances), gt_indices)
+        lut[unmatched] = np.arange(start, start + unmatched.size)
+        instance_labels_tmp = lut[result['instance_labels'].F.cpu().numpy()]
+
+        instance_labels = np.full(voxels.shape[0], fill_value=-1, dtype=int)
+        instance_labels[semantic_mask] = instance_labels_tmp
+
+        rng = np.random.default_rng(0)
+        palette = []
+        reserved_colors = np.array([
+            [0.2, 0.2, 0.2],  # Ground
+            [1.0, 0.0, 0.0],  # Not matched
+        ])
+
+        while len(palette) < len(np.unique(instance_labels)):
+            color = rng.random(3)
+            if np.all(np.linalg.norm(reserved_colors - color, axis=1) > 0.2):
+                palette.append(color)
+
+        palette = np.array(palette)
+
+        id2color = {uid: palette[i] for i, uid in enumerate(np.unique(instance_labels)) if i != -1}
+        diff = np.setdiff1d(np.unique(instance_output), np.unique(instance_labels))
+        id2color.update({uid: tuple(reserved_colors[1]) for uid in diff})
+        id2color[-1] = tuple(reserved_colors[0])
+
+        for idx in np.unique(batch_idx):
+            mask = batch_idx == idx
+            cloud_voxels = voxels[mask]
+
+            cloud_semantic_output = semantic_output[mask]
+            cloud_semantic_labels = semantic_labels[mask]
+
+            cloud_centroid_score_output = centroid_score_output[mask]
+            cloud_centroid_score_labels = centroid_score_labels[mask]
+
+            cloud_offset_output = offset_output[mask]
+            cloud_offset_labels = offset_labels[mask]
+
+            cloud_instance_output = instance_output[mask]
+            cloud_instance_labels = instance_labels[mask]
+
+            mask = centroid_batch_idx == idx
+
+            pcd_gt.points = o3d.utility.Vector3dVector(cloud_voxels)
+            pcd_pred.points = o3d.utility.Vector3dVector(cloud_voxels)
+
+            class_colormap = np.array([semantic_cls.color for semantic_cls in self._cfg.dataset.classes])
+
+            colors = class_colormap[cloud_semantic_labels] / 255.0
+            pcd_gt.colors = o3d.utility.Vector3dVector(colors)
+            colors = class_colormap[cloud_semantic_output] / 255.0
+            pcd_pred.colors = o3d.utility.Vector3dVector(colors)
+            self._writer.add_3d("Val_Semantic/Pred_pointcloud", to_dict_batch([pcd_pred]), step)
+            self._writer.add_3d("Val_Semantic/GT_pointcloud", to_dict_batch([pcd_gt]), step)
+
+            cmap = plt.get_cmap('viridis')
+            cmap_spheres = plt.get_cmap('inferno')
+            colors = cmap(cloud_centroid_score_labels[:, 0])[:, :3]
+            pcd_gt.colors = o3d.utility.Vector3dVector(colors)
+            colors = cmap(cloud_centroid_score_output[:, 0])[:, :3]
+            pcd_pred.colors = o3d.utility.Vector3dVector(colors)
+
+            spheres = []
+            for i in np.unique(cloud_instance_output):
+                if i < 0:
+                    continue
+                
+                center = centroid_voxels[i]
+                confidence = centroid_confidence_output[i][0]
+
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.5)
+                sphere.translate(center)
+                color = cmap_spheres(confidence)[:3]
+                sphere.paint_uniform_color(color)
+                spheres.append(sphere.sample_points_uniformly(number_of_points=50))
+
+            self._writer.add_3d("Val_Centroids/Pred_pointcloud", to_dict_batch([pcd_pred]), step)
+            self._writer.add_3d("Val_Centroids/GT_pointcloud", to_dict_batch([pcd_gt]), step)
+
+            voxels_disp_output = cloud_voxels + cloud_offset_output
+            voxels_disp_labels = cloud_voxels + cloud_offset_labels
+
+            pcd_gt.points = o3d.utility.Vector3dVector(voxels_disp_labels)
+            pcd_pred.points = o3d.utility.Vector3dVector(voxels_disp_output)
+
+            colors = class_colormap[cloud_semantic_labels] / 255.0
+            pcd_gt.colors = o3d.utility.Vector3dVector(colors)
+            colors = class_colormap[cloud_semantic_output] / 255.0
+            pcd_pred.colors = o3d.utility.Vector3dVector(colors)
+
+            self._writer.add_3d("Val_Offset/Pred_pointcloud", to_dict_batch([pcd_pred]), step)
+            self._writer.add_3d("Val_Offset/GT_pointcloud", to_dict_batch([pcd_gt]), step)
+
+            pcd_gt.points = o3d.utility.Vector3dVector(cloud_voxels)
+            pcd_pred.points = o3d.utility.Vector3dVector(cloud_voxels)
+
+            colors = np.array([id2color[i] for i in cloud_instance_labels], dtype=np.float64)
+            pcd_gt.colors = o3d.utility.Vector3dVector(colors)
+            colors = np.array([id2color[i] for i in cloud_instance_output], dtype=np.float64)
+            pcd_pred.colors = o3d.utility.Vector3dVector(colors)
+
+            self._writer.add_3d("Val_Instance/Pred_pointcloud", to_dict_batch([pcd_pred]), step)
+            self._writer.add_3d("Val_Instance/GT_pointcloud", to_dict_batch([pcd_gt]), step)
 
     def train(self) -> None:
         """
@@ -575,10 +716,12 @@ class Panoramix3DTrainer:
             self._save_ckpt(epoch + 1)
             print(f"\n✅ Epoch {epoch + 1} / {epochs} finished.")
 
+            self.eval(epoch)
+
         self._save_weights()
         print(f"\n✅ Training finished. Weights saved to {self._weights_folder}")
 
-    def val(self) -> Iterator[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    def eval(self, epoch: int = 0) -> None:
         """
         Execute validation procedure with the trained model in evaluation mode.
         Uses optimized inference settings including fused operations and locality-aware
@@ -599,6 +742,16 @@ class Panoramix3DTrainer:
         )
         
         self._model.eval()
+        stats = {
+            'semantic_iou': [],
+            'semantic_precision': [],
+            'semantic_recall': [],
+            'semantic_f1': [],
+            'instance_iou': [],
+            'instance_precision': [],
+            'instance_recall': [],
+            'instance_f1': []
+        }
 
         # enable torchsparse 2.0 inference
         # enable fused and locality-aware memory access optimization
@@ -618,4 +771,17 @@ class Panoramix3DTrainer:
                     'Instance': result['loss']['instance_loss'].item()
                 })
 
-                self._log_stats(result['loss'], result['stat'], pbar.n, prefix='Val')
+                stats['semantic_iou'].append(result['stat']['semantic_iou'])
+                stats['semantic_precision'].append(result['stat']['semantic_precision'])
+                stats['semantic_recall'].append(result['stat']['semantic_recall'])
+                stats['semantic_f1'].append(result['stat']['semantic_f1'])
+                stats['instance_iou'].append(result['stat']['instance_iou'])
+                stats['instance_precision'].append(result['stat']['instance_precision'])
+                stats['instance_recall'].append(result['stat']['instance_recall'])
+                stats['instance_f1'].append(result['stat']['instance_f1'])
+
+                self._log_stats(result['loss'], result['stat'], epoch * len(data_loader) + pbar.n, prefix='Val')
+                # self._log_pointclouds(epoch * len(data_loader) + pbar.n, result)
+
+        stats = {k: np.array(v).mean(axis=0) for k, v in stats.items()}
+        self._log_mean_stats(epoch, stats)

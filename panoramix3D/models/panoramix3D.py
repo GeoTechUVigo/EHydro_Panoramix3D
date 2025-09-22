@@ -4,7 +4,8 @@ from torch import nn
 from torchsparse import SparseTensor
 from torchsparse.backbones.resnet import SparseResNet
 
-from typing import Tuple, List, Union
+from typing import Tuple
+from pathlib import Path
 
 from ..modules import FeatDecoder, CentroidHead, OffsetHead, InstanceHead
 from ..config import ModelConfig
@@ -137,10 +138,10 @@ class Panoramix3D(nn.Module):
         instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, cluster_coords, inv_map)
 
         return semantic_output, centroid_scores, offsets, centroid_confidences, instance_output
-    
-    def load_weights(self, ckpt: dict | str, key: str = 'model_state_dict') -> None:
-        if isinstance(ckpt, str):
-            ckpt = torch.load(ckpt, map_location=self.device)
+
+    def load_weights(self, ckpt: dict | str | Path, key: str = 'model_state_dict') -> None:
+        if isinstance(ckpt, str) or isinstance(ckpt, Path):
+            ckpt = torch.load(ckpt, map_location=next(self.parameters()).device)
 
         state = ckpt.get(key, ckpt)
         self.load_state_dict(state)
