@@ -47,7 +47,9 @@ class FeatDecoder(nn.Module):
             out_dim: int = 1,
             aux_dim: int = 0,
             bias: bool = True,
-            init_bias: float = None
+            init_bias: float = None,
+            batch_norm: bool = False,
+            relu: bool = False
         ):
         super().__init__()
 
@@ -86,6 +88,13 @@ class FeatDecoder(nn.Module):
             bias=bias
         )
 
+        self.batch_norm = None
+        self.relu = None
+
+        if batch_norm:
+            self.batch_norm = spnn.BatchNorm(out_dim)
+        if relu:
+            self.relu = spnn.ReLU(True)
         if bias and init_bias is not None:
             nn.init.constant_(self.proj.bias, val=init_bias)
 
@@ -124,7 +133,7 @@ class FeatDecoder(nn.Module):
         
         return SparseTensor(coords=A.C, feats=cat((A.F, outB.to(A.F.dtype)), dim=1))
 
-    def forward(self, x: List[SparseTensor], aux: SparseTensor = None, mask: Tensor = None, reduce: Tensor = None, new_coords: Tensor = None) -> SparseTensor:
+    def forward(self, x: List[SparseTensor], aux: Tensor = None, mask: Tensor = None, reduce: Tensor = None, new_coords: Tensor = None) -> SparseTensor:
         """
         Forward pass through the multi-scale decoder.
 
@@ -158,10 +167,20 @@ class FeatDecoder(nn.Module):
             current = SparseTensor(coords=current.C[mask], feats=current.F[mask])
             
         if aux is not None:
-            current = self._union_sparse_layers(current, aux)
+            # current = self._union_sparse_layers(current, aux)
+            if isinstance(aux, list):
+                current.F = cat([current.F] + aux, dim=1)
+            else:
+                current.F = cat([current.F, aux], dim=1)
 
         if reduce is not None and new_coords is not None:
             current = SparseTensor(coords=new_coords, feats=scatter_mean(current.F, reduce, dim=0))
 
-        return self.proj(current)
+        current = self.proj(current)
+        if self.batch_norm is not None:
+            current = self.batch_norm(current)
+        if self.relu is not None:
+            current = self.relu(current)
+
+        return current
     

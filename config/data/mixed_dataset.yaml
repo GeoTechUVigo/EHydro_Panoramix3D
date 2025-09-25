@@ -1,5 +1,5 @@
 name: MixedDataset
-root: /home/samuel/Panoramix3D_data/datasets/MixedDataset
+root: /home/samuel/Panoramix3D_data/datasets/MixedDataset/processed
 
 voxel_size: 0.3
 centroid_sigma_min: 1.0
@@ -7,9 +7,8 @@ centroid_sigma_max: 4.0
 centroid_sigma_divisor: 18.0
 min_tree_voxels: 125
 feat_keys:
-  - norm_intensity
-
-classes:
+  - intensity_norm
+semantic_classes:
   - name: ground
     id: 0
     color: [128, 128, 128]
@@ -19,11 +18,17 @@ classes:
   - name: canopy
     id: 2
     color: [0, 128, 0]
-
+specie_classes:
+  - name: conifer
+    id: 1
+    color: [255, 165, 0]
+  - name: broadleaf
+    id: 2
+    color: [0, 128, 0]
 splits:
   train:
     data_augmentation:
-      coef: 8
+      coef: 7
       yaw_range: [0.0, 360.0]
       tilt_range: [-5.0, 5.0]
       scale_range: [0.9, 1.3]

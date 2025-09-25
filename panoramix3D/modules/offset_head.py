@@ -125,6 +125,6 @@ class OffsetHead(nn.Module):
             - The inv_map enables subsequent cluster-wise feature aggregation.
         """
         offsets = self.decoder(feats, mask=mask)
-        out_coords, inv_map = self._revoxelize(offsets if offset_labels is None else offset_labels)
+        # out_coords, inv_map = self._revoxelize(offsets if offset_labels is None else offset_labels)
 
-        return offsets, out_coords, inv_map
+        return offsets  #, out_coords, inv_map

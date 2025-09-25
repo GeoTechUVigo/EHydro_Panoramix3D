@@ -64,6 +64,12 @@ class Panoramix3D(nn.Module):
             bias=True
         )
 
+        self.specie_head = FeatDecoder(
+            blocks=cfg.backbone.resnet_blocks,
+            out_dim=cfg.specie_head.num_classes,
+            bias=True
+        )
+
         self.offset_head = OffsetHead(
             decoder_blocks=cfg.backbone.resnet_blocks
         )
@@ -78,7 +84,9 @@ class Panoramix3D(nn.Module):
 
         self.instance_head = InstanceHead(
             resnet_blocks=cfg.backbone.resnet_blocks,
-            descriptor_dim=cfg.instance_head.descriptor_dim
+            descriptor_dim=cfg.instance_head.descriptor_dim,
+            semantic_dim=cfg.semantic_head.num_classes,
+            specie_dim=cfg.specie_head.num_classes
         )
 
     def forward(self, x: SparseTensor, semantic_labels: SparseTensor = None, centroid_score_labels: SparseTensor = None, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
@@ -133,11 +141,12 @@ class Panoramix3D(nn.Module):
             semantic_labels = semantic_labels.F
 
         ng_mask = (semantic_labels != 0)
-        offsets, cluster_coords, inv_map = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
+        specie_output = self.specie_head(feats, mask=ng_mask)
+        offset_output = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
         centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, mask=ng_mask, centroid_score_labels=centroid_score_labels)
-        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, offsets.C, cluster_coords, inv_map)
+        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, semantic_output, specie_output, offset_output)
 
-        return semantic_output, centroid_scores, offsets, centroid_confidences, instance_output
+        return semantic_output, specie_output, centroid_scores, offset_output, centroid_confidences, instance_output
 
     def load_weights(self, ckpt: dict | str | Path, key: str = 'model_state_dict') -> None:
         if isinstance(ckpt, str) or isinstance(ckpt, Path):

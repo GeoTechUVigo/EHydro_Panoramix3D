@@ -5,7 +5,7 @@ from . import StrictModel, _load_yaml_with_includes
 
 
 class TrainScheduleConfig(StrictModel):
-    epochs: int = Field(..., gt=0, description="Number of epochs to train for (int > 0).")
+    epochs: int = Field(..., ge=0, description="Number of epochs to train for (int >= 0).")
     lr_scale: float = Field(..., gt=0, description="Learning rate scale factor (float > 0).")
     freeze_modules: list[Literal['backbone', 'semantic', 'offset', 'centroid', 'instance']] = Field(..., description="List of modules to freeze (list of strings).")
 
@@ -21,6 +21,7 @@ class TrainScheduleConfig(StrictModel):
 
 class LossCoeffsConfig(StrictModel):
     semantic_loss_coeff: float = Field(2.0, gt=0, description="Semantic segmentation loss coefficient (float > 0).")
+    specie_loss_coeff: float = Field(2.0, gt=0, description="Specie classification loss coefficient (float > 0).")
     centroid_loss_coeff: float = Field(1.0, gt=0, description="Centroid detection loss coefficient (float > 0).")
     offset_loss_coeff: float = Field(1.0, gt=0, description="Offset prediction loss coefficient (float > 0).")
     offset_smooth_l1_beta_loss_coef: float = Field(5.0, gt=0, description="Offset Smooth L1 loss beta coefficient (float > 0).")

@@ -4,6 +4,19 @@ from typing import List, Tuple
 from . import StrictModel, _load_yaml_with_includes
 
 
+class SpecieClassConfig(StrictModel):
+    name: str = Field(..., description="Name of the specie class.")
+    id: int = Field(..., ge=0, description="ID of the specie class (must be non-negative).")
+    color: List[int] = Field(..., description="RGB color of the specie class.")
+
+    @field_validator('color')
+    @classmethod
+    def _rgb_color(cls, v: Tuple[int, int, int]):
+        if len(v) != 3 or any(c < 0 or c > 255 for c in v):
+            raise ValueError('Color must be a list of three integers between 0 and 255.')
+        return v
+
+
 class SemanticClassConfig(StrictModel):
     name: str = Field(..., description="Name of the semantic class.")
     id: int = Field(..., ge=0, description="ID of the semantic class (must be non-negative).")
@@ -66,18 +79,30 @@ class DatasetConfig(StrictModel):
     centroid_sigma_divisor: float = Field(18.0, gt=0, description="Centroid sigma divisor (float > 0).")
     min_tree_voxels: int = Field(125, ge=1, description="Minimum number of voxels for a tree instance (int >= 1).")
     feat_keys: List[str] = Field(['intensity'], description="List of feature keys.")
-    classes: List[SemanticClassConfig] = Field(..., min_length=2, description="List of semantic classes (Min 2).")
+    semantic_classes: List[SemanticClassConfig] = Field(..., min_length=2, description="List of semantic classes (Min 2).")
+    specie_classes: List[SpecieClassConfig] = Field(..., min_length=2, description="List of specie classes.")
     splits: SplitsConfig = Field(..., description="Dataset splits configuration.")
 
-    @field_validator("classes")
+    @field_validator("semantic_classes")
     @classmethod
-    def _classes_unique(cls, v: List[SemanticClassConfig]) -> List[SemanticClassConfig]:
+    def _semantic_classes_unique(cls, v: List[SemanticClassConfig]) -> List[SemanticClassConfig]:
         ids = [c.id for c in v]
         names = [c.name for c in v]
         if len(ids) != len(set(ids)):
-            raise ValueError("IDs de classes deben ser únicos.")
+            raise ValueError("IDs de semantic_classes deben ser únicos.")
         if len(names) != len(set(names)):
-            raise ValueError("Nombres de classes deben ser únicos.")
+            raise ValueError("Nombres de semantic_classes deben ser únicos.")
+        return v
+    
+    @field_validator("specie_classes")
+    @classmethod
+    def _specie_classes_unique(cls, v: List[SpecieClassConfig]) -> List[SpecieClassConfig]:
+        ids = [c.id for c in v]
+        names = [c.name for c in v]
+        if len(ids) != len(set(ids)):
+            raise ValueError("IDs de specie_classes deben ser únicos.")
+        if len(names) != len(set(names)):
+            raise ValueError("Nombres de specie_classes deben ser únicos.")
         return v
 
     @model_validator(mode="after")
@@ -89,13 +114,13 @@ class DatasetConfig(StrictModel):
     @model_validator(mode='after')
     def _validate_consistency(self):
         # Validate that dataset class IDs are sequential starting from 0
-        dataset_num_classes = len(self.classes)
+        dataset_num_classes = len(self.semantic_classes)
         expected_ids = set(range(dataset_num_classes))
-        actual_ids = {cls.id for cls in self.classes}
+        actual_ids = {cls.id for cls in self.semantic_classes}
         
         if actual_ids != expected_ids:
             raise ValueError(
-                f"Dataset class IDs must be sequential starting from 0. "
+                f"Dataset semantic_class IDs must be sequential starting from 0. "
                 f"Expected: {sorted(expected_ids)}, Got: {sorted(actual_ids)}"
             )
         

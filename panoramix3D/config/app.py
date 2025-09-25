@@ -46,7 +46,7 @@ class AppConfig(StrictModel):
 
     @model_validator(mode='after')
     def _validate_consistency(self):
-        dataset_num_classes = len(self.dataset.classes)
+        dataset_num_classes = len(self.dataset.semantic_classes)
         model_num_classes = self.model.semantic_head.num_classes
         
         if model_num_classes != dataset_num_classes:

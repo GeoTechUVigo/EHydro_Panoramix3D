@@ -6,13 +6,13 @@ train_schedule:
   - epochs: 1
     lr_scale: 1.0
     freeze_modules: ['instance']
-  - epochs: 2
+  - epochs: 5
     lr_scale: 1.0
     freeze_modules: []
-  - epochs: 2
+  - epochs: 5
     lr_scale: 0.1
     freeze_modules: []
-  - epochs: 2
+  - epochs: 5
     lr_scale: 0.01
     freeze_modules: []
 start_epoch: 1
@@ -20,6 +20,7 @@ num_workers: 4
 weight_decay: 0.05
 loss_coeffs:
   semantic_loss_coeff: 2.0
+  specie_loss_coeff: 2.0
   centroid_loss_coeff: 1.0
   offset_loss_coeff: 1.0
   offset_smooth_l1_beta_loss_coef: 5.0

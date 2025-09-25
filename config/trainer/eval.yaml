@@ -1,5 +1,5 @@
 root: /home/samuel/Panoramix3D_data
-version_name: 'Panoramix3D_base_V1'
+version_name: 'Panoramix3D_base_V3'
 mode: 'val'
 batch_size: 1
 train_schedule:
@@ -15,11 +15,12 @@ train_schedule:
   - epochs: 5
     lr_scale: 0.01
     freeze_modules: []
-start_epoch: 0
+start_epoch: 1
 num_workers: 4
-weight_decay: 0.04
+weight_decay: 0.05
 loss_coeffs:
   semantic_loss_coeff: 2.0
+  specie_loss_coeff: 2.0
   centroid_loss_coeff: 1.0
   offset_loss_coeff: 1.0
   offset_smooth_l1_beta_loss_coef: 5.0

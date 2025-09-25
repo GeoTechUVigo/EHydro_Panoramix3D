@@ -49,12 +49,20 @@ class InstanceHead(nn.Module):
                 (3, 128, 3, 2),
                 (1, 128, (1, 1, 3), (1, 1, 2)),
             ],
-            descriptor_dim = 16,
+            descriptor_dim: int = 16,
+            semantic_dim: int = 3,
+            specie_dim: int = 2
         ):
         super().__init__()
 
-        self.cluster_descriptor = FeatDecoder(resnet_blocks, descriptor_dim, bias=True)
-        self.centroid_descriptor = FeatDecoder(resnet_blocks, descriptor_dim, aux_dim=1, bias=True)
+        self.cluster_descriptor = FeatDecoder(
+            blocks=resnet_blocks,
+            out_dim=descriptor_dim,
+            aux_dim=semantic_dim + specie_dim,
+            bias=True,
+            relu=True
+        )
+        #self.centroid_descriptor = FeatDecoder(resnet_blocks, descriptor_dim, aux_dim=1, bias=True, relu=True)
         '''
         self.descriptor_conv = nn.Sequential(
             spnn.Conv3d(
@@ -70,14 +78,14 @@ class InstanceHead(nn.Module):
 
         self.descriptor_conv_2d = nn.Sequential(
             nn.Conv2d(
-                in_channels=descriptor_dim * 2 + 1,
-                out_channels=descriptor_dim,
+                in_channels=descriptor_dim * 2 + 7,
+                out_channels=descriptor_dim + 3,
                 kernel_size=1,
-                bias=False
+                bias=True
             ),
             nn.ReLU(inplace=True),
             nn.Conv2d(
-                in_channels=descriptor_dim,
+                in_channels=descriptor_dim + 3,
                 out_channels=1,
                 kernel_size=1,
                 bias=True
@@ -98,9 +106,9 @@ class InstanceHead(nn.Module):
             peak_indices: Tensor,
             centroid_confidences: SparseTensor,
             ng_mask: Tensor,
-            orig_coords: Tensor,
-            cluster_coords: Tensor,
-            cluster_map: Tensor
+            semantic_output: SparseTensor,
+            specie_output: SparseTensor,
+            offset_output: SparseTensor
         ) -> SparseTensor:
         """
         Forward pass for instance assignment prediction.
@@ -131,49 +139,19 @@ class InstanceHead(nn.Module):
             - Logits are clamped to [-10, 10]
             - Processing is done independently per batch to handle variable centroid counts and mitigate memory usage
         """
-        #print(f'Num of params: {sum(p.numel() for p in self.descriptor.parameters())} in descriptor')
-        #print(f'mean weight: {torch.mean(torch.cat([p.view(-1) for p in self.descriptor.parameters()]))}, std: {torch.std(torch.cat([p.view(-1) for p in self.descriptor.parameters()]))}')
-        '''
-        for n, p in self.descriptor_conv.named_parameters():
-            if torch.isnan(p).any() or torch.isinf(p).any() or torch.isneginf(p).any():
-                print(f"Descriptor conv parameter {n} contains NaN or Inf")
+        voxel_descriptors = self.voxel_descriptors = self.cluster_descriptor(feats, mask=ng_mask, aux=[semantic_output.F[ng_mask], specie_output.F])
+        if peak_indices.size(0) == 0:
+            return SparseTensor(coords=voxel_descriptors.C, feats=torch.empty(voxel_descriptors.F.size(0), 0, dtype=centroid_confidences.F.dtype, device=centroid_confidences.F.device))
 
-        for n, b in self.descriptor_conv.named_buffers():
-            if torch.isnan(b).any() or torch.isinf(b).any():
-                print(f"[BUFFER PROBLEM] {n} tiene NaN/Inf, min={b.min()}, max={b.max()}")
-
-        voxel_descriptors = self.descriptor(feats, mask=ng_mask)
-        self._log_inf_or_nan(voxel_descriptors.F, 'Voxel descriptors')
-        #print(f'min voxel descriptor {voxel_descriptors.F.min()}, max: {voxel_descriptors.F.max()}, mean: {voxel_descriptors.F.mean()}, shape: {voxel_descriptors.F.shape}')
-
-        cluster_descriptors = scatter_mean(voxel_descriptors.F, cluster_map, dim=0)
-        self._log_inf_or_nan(cluster_descriptors, 'Cluster descriptors filt')
-
-        cluster_descriptors = cluster_descriptors.index_select(0, cluster_map)
-        self._log_inf_or_nan(cluster_descriptors, 'Cluster descriptors remap')
-        #print(f'min cluster descriptor {cluster_descriptors.min()}, max: {cluster_descriptors.max()}, mean: {cluster_descriptors.mean()}, shape: {cluster_descriptors.shape}')
-        voxel_descriptors.F = cat([voxel_descriptors.F, cluster_descriptors], dim=1)
-        self._log_inf_or_nan(voxel_descriptors.F, 'Voxel descriptors cat')
-        #print(f'min voxel descriptor cat {voxel_descriptors.F.min()}, max: {voxel_descriptors.F.max()}, mean: {voxel_descriptors.F.mean()}, shape: {voxel_descriptors.F.shape}')
-
-        voxel_descriptors = self.descriptor_conv(voxel_descriptors)
-            
-        self._log_inf_or_nan(voxel_descriptors.F, 'Final voxel descriptors')
-        #print(f'min final voxel descriptor {voxel_descriptors.F.min()}, max: {voxel_descriptors.F.max()}, mean: {voxel_descriptors.F.mean()}, shape: {voxel_descriptors.F.shape}')
-        del cluster_descriptors
-
-        cluster_coords = cluster_coords.index_select(0, cluster_map)
         centroid_descriptors = SparseTensor(
             coords=voxel_descriptors.C[peak_indices],
             feats=cat([voxel_descriptors.F[peak_indices], centroid_confidences.F], dim=1)
         )
-        '''
 
-        if peak_indices.size(0) == 0:
-            return SparseTensor(coords=orig_coords, feats=torch.empty(orig_coords.size(0), 0, dtype=centroid_confidences.F.dtype, device=centroid_confidences.F.device))
+        new_coords = voxel_descriptors.C[:, 1:].to(offset_output.F.dtype) + offset_output.F
+        voxel_descriptors.F = cat([offset_output.F, voxel_descriptors.F], dim=1)
 
-        cluster_descriptors = self.cluster_descriptor(feats, mask=ng_mask, reduce=cluster_map, new_coords=cluster_coords)
-        centroid_descriptors = self.centroid_descriptor(feats, mask=ng_mask.nonzero(as_tuple=False).squeeze(1)[peak_indices], aux=centroid_confidences.F)
+        cluster_descriptors = voxel_descriptors
 
         batch_indices = torch.unique(cluster_descriptors.C[:, 0])
         output_features = torch.full((cluster_descriptors.F.size(0), centroid_descriptors.F.size(0)),
@@ -181,7 +159,6 @@ class InstanceHead(nn.Module):
                                     dtype=cluster_descriptors.F.dtype,
                                     device=cluster_descriptors.F.device)
 
-        #print(f'Output features initial shape: {output_features.shape}')
         for batch_idx in batch_indices:
             voxel_mask = cluster_descriptors.C[:, 0] == batch_idx
             centroid_mask = centroid_descriptors.C[:, 0] == batch_idx
@@ -193,13 +170,8 @@ class InstanceHead(nn.Module):
             batch_centroid_descriptors = centroid_descriptors.F[centroid_mask]
 
             with torch.no_grad():
-                batch_cluster_dists = (cluster_coords[voxel_mask][:, 1:][:, None, :] - centroid_descriptors.C[centroid_mask][:, 1:][None, :, :]).to(cluster_descriptors.F.dtype)
-                batch_cluster_dists = torch.log1p(torch.norm(batch_cluster_dists, p=2, dim=-1).clamp(min=1)).unsqueeze(-1)
+                batch_cluster_dists = (new_coords[voxel_mask][:, None, :] - centroid_descriptors.C[centroid_mask][:, 1:][None, :, :]).to(new_coords.dtype)
                 self._log_inf_or_nan(batch_cluster_dists, 'Cluster dists')
-
-                #batch_voxel_dists = (cluster_descriptors.C[voxel_mask][:, 1:][:, None, :] - centroid_descriptors.C[centroid_mask][:, 1:][None, :, :]).to(voxel_descriptors.F.dtype)
-                #batch_voxel_dists = torch.log1p(torch.norm(batch_voxel_dists, p=2, dim=-1).clamp(min=1)).unsqueeze(-1)
-                #self._log_inf_or_nan(batch_voxel_dists, 'Voxel dists')
 
             batch_voxel_descriptors_exp = batch_voxel_descriptors.unsqueeze(1).expand(-1, batch_centroid_descriptors.size(0), -1)
             batch_centroid_descriptors_exp = batch_centroid_descriptors.unsqueeze(0).expand(batch_voxel_descriptors.size(0), -1, -1)
@@ -209,14 +181,11 @@ class InstanceHead(nn.Module):
             self._log_inf_or_nan(batch_centroid_descriptors_exp, 'Batch centroid descriptors expanded')
 
             del batch_voxel_descriptors, batch_centroid_descriptors
-
             batch_output = self.descriptor_conv_2d(torch.cat([
                 batch_voxel_descriptors_exp,
                 batch_centroid_descriptors_exp,
-                # batch_voxel_dists,
-                # batch_cluster_dists
-                torch.zeros_like(batch_cluster_dists)
-            ], dim=-1).permute(2, 0, 1).contiguous().unsqueeze(0))[0, 0, :, :].to(output_features.dtype)
+                batch_cluster_dists
+            ], dim=-1).permute(2, 0, 1).contiguous().unsqueeze(0))[0, 0, :, :].to(output_features.dtype).clamp(min=-10.0, max=10.0).nan_to_num(0.0)
 
             self._log_inf_or_nan(batch_output, 'Batch output')
 
@@ -226,5 +195,5 @@ class InstanceHead(nn.Module):
             output_features[rows, cols] = batch_output
             del batch_output
 
-        return SparseTensor(coords=orig_coords, feats=output_features.index_select(0, cluster_map))
+        return SparseTensor(coords=voxel_descriptors.C, feats=output_features)
         

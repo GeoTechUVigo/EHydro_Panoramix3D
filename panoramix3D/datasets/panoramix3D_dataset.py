@@ -151,10 +151,11 @@ class Panoramix3DDataset(Dataset):
 
             semantic_labels = np.array(file.semantic_gt)
             instance_labels = np.array(file.instance_gt)
+            species_labels = np.array(file.species_gt)
         else:
             raise ValueError(f'Unsopported file extension: {ext}!')
 
-        return coords, feats, semantic_labels, instance_labels
+        return coords, feats, semantic_labels, instance_labels, species_labels
     
     def _augment_data(self, coords: np.ndarray) -> np.ndarray:
         """
@@ -319,7 +320,8 @@ class Panoramix3DDataset(Dataset):
             - Instance IDs are compacted to consecutive integers starting from 0
             - All outputs share the same voxel coordinate space
         """
-        coords, feat, semantic_labels, instance_labels = self._load_file(self._files[idx % len(self._files)])
+        coords, feat, semantic_labels, instance_labels, specie_labels = self._load_file(self._files[idx % len(self._files)])
+        current_file = self._files[idx % len(self._files)]
         if idx >= len(self._files):
             coords = self._augment_data(coords)
 
@@ -329,13 +331,15 @@ class Panoramix3DDataset(Dataset):
         feat = feat[indices]
         semantic_labels = semantic_labels[indices]
         instance_labels = instance_labels[indices]
+        specie_labels = specie_labels[indices]
 
         sizes = np.bincount(instance_labels)[instance_labels]
-        size_mask = sizes >= self._cfg.min_tree_voxels
+        size_mask = (sizes >= self._cfg.min_tree_voxels) & ((instance_labels != 0) | (semantic_labels == 0)) 
         voxels = voxels[size_mask]
         feat = feat[size_mask]
         semantic_labels = semantic_labels[size_mask]
         instance_labels = instance_labels[size_mask]
+        specie_labels = specie_labels[size_mask]
         
         _, instance_labels = np.unique(instance_labels, return_inverse=True)
 
@@ -349,6 +353,7 @@ class Panoramix3DDataset(Dataset):
         centroid_score_labels = torch.tensor(centroid_score_labels, dtype=torch.float)
         offset_labels = torch.tensor(offset_labels, dtype=torch.float)
         instance_labels = torch.tensor(instance_labels, dtype=torch.long)
+        specie_labels = torch.tensor(specie_labels, dtype=torch.long)
 
         inputs = SparseTensor(coords=voxels, feats=feat)
         
@@ -356,13 +361,15 @@ class Panoramix3DDataset(Dataset):
         centroid_score_labels = SparseTensor(coords=voxels, feats=centroid_score_labels)
         offset_labels = SparseTensor(coords=voxels, feats=offset_labels)
         instance_labels = SparseTensor(coords=voxels, feats=instance_labels)
+        specie_labels = SparseTensor(coords=voxels, feats=specie_labels)
 
         return {
             "inputs": inputs,
             "semantic_labels": semantic_labels,
             "centroid_score_labels": centroid_score_labels,
             "offset_labels": offset_labels,
-            "instance_labels": instance_labels
+            "instance_labels": instance_labels,
+            "specie_labels": specie_labels
         }
     
     def __len__(self) -> int:

@@ -38,6 +38,10 @@ class SemanticHeadConfig(StrictModel):
     num_classes: int = Field(3, gt=0, description="Number of semantic classes (int > 0).")
 
 
+class SpecieHeadConfig(StrictModel):
+    num_classes: int = Field(2, gt=0, description="Number of specie classes (int > 0).")
+
+
 class CentroidHeadConfig(StrictModel):
     instance_density: float = Field(0.01, gt=0, description="Instance density (float > 0).")
     score_thres: float = Field(0.2, gt=0, description="Score threshold (float > 0).")
@@ -53,6 +57,7 @@ class ModelConfig(MutableModel):
     weights_file: Optional[str] = Field(None, description="Path to pre-trained weights file.")
     backbone: BackboneConfig = Field(default_factory=BackboneConfig, description="Backbone network configuration.")
     semantic_head: SemanticHeadConfig = Field(default_factory=SemanticHeadConfig, description="Semantic head configuration.")
+    specie_head: SpecieHeadConfig = Field(default_factory=SpecieHeadConfig, description="Specie head configuration.")
     centroid_head: CentroidHeadConfig = Field(default_factory=CentroidHeadConfig, description="Centroid head configuration.")
     instance_head: InstanceHeadConfig = Field(default_factory=InstanceHeadConfig, description="Instance head configuration.")
 
