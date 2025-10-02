@@ -159,13 +159,24 @@ class FeatDecoder(nn.Module):
         """
         current = x[-1]
         for i in range(len(x)-2, -1, -1):
-            current = self.upsample[i](current)
-            current.F = cat([current.F, x[i].F], dim=1)
-            current = self.conv[i](current)
+            if current.C.size(0) == 0:
+                current = SparseTensor(
+                    coords=x[i].C,
+                    feats=torch.zeros_like(x[i].F),
+                    stride=x[i].stride,
+                )
+            else:
+                current = self.upsample[i](current)
+
+            if current.C.size(0) > 0:
+                xi_f = x[i].F
+                x[i].F = cat([current.F, x[i].F], dim=1)
+                current = self.conv[i](x[i])
+                x[i].F = xi_f  # restore original features to avoid side effects
         
         if mask is not None:
             current = SparseTensor(coords=current.C[mask], feats=current.F[mask])
-            
+        
         if aux is not None:
             # current = self._union_sparse_layers(current, aux)
             if isinstance(aux, list):

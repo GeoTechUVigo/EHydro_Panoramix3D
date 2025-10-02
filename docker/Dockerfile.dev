@@ -1,0 +1,43 @@
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+ARG USERNAME=appuser
+ARG UID=1000
+ARG GID=1000
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev build-essential ca-certificates git libsparsehash-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && mkdir -p /workspace/input /workspace/output \
+    && chown -R ${USERNAME}:${USERNAME} /workspace
+USER ${USERNAME}
+
+WORKDIR /workspace
+ENV INPUT_DIR=/workspace/input \
+    OUTPUT_DIR=/workspace/output \
+    PYTHONUNBUFFERED=1
+
+RUN python3 -m pip install numpy==1.26.3 torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
+COPY --chown=${USERNAME}:${USERNAME} ./requirements.txt /tmp/requirements.txt
+RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+ENV CUDA_HOME=/usr/local/cuda \
+    FORCE_CUDA=1 \
+    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
+
+RUN git clone https://github.com/mit-han-lab/torchsparse.git /tmp/torchsparse \
+    && cd /tmp/torchsparse \
+    && python3 setup.py install --user \
+    && cd /workspace \
+    && rm -rf /tmp/torchsparse
+
+COPY --chown=${USERNAME}:${USERNAME} weights/Panoramix3D_base_V4_epoch_1.pth /workspace/weights/Panoramix3D_base_V4_epoch_1.pth
+COPY --chown=${USERNAME}:${USERNAME} . /workspace/Panoramix3D
+RUN cd /workspace/Panoramix3D \
+    && python3 setup.py install --user
+
+ENTRYPOINT ["python3", "/workspace/Panoramix3D/bin/process_clouds.py"]

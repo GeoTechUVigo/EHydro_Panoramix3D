@@ -2,12 +2,11 @@ import torch
 
 from torch import nn
 from torchsparse import SparseTensor
-from torchsparse.backbones.resnet import SparseResNet
 
 from typing import Tuple
 from pathlib import Path
 
-from ..modules import FeatDecoder, CentroidHead, OffsetHead, InstanceHead
+from ..modules import SparseResNet, FeatDecoder, CentroidHead, OffsetHead, InstanceHead
 from ..config import ModelConfig
 
 class Panoramix3D(nn.Module):
@@ -133,6 +132,9 @@ class Panoramix3D(nn.Module):
               of voxels based on the semantic mask.
         """
         feats = self.encoder(x)
+        if feats is None:
+            return None
+
         semantic_output = self.semantic_head(feats)
 
         if semantic_labels is None:

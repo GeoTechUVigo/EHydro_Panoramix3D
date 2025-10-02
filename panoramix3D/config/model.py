@@ -21,7 +21,7 @@ class BackboneConfig(StrictModel):
     def _validate_resnet_blocks(cls, v: List[layer_spec]):
         if not v:
             raise ValueError('resnet_blocks must contain at least one block specification.')
-        for block in v:
+        for idx, block in enumerate(v):
             if len(block) != 4:
                 raise ValueError('Each block specification must be a tuple of four elements (num_blocks, out_channels, kernel, stride).')
             if not all(isinstance(x, int) and x > 0 for x in block[:2]):
@@ -30,6 +30,11 @@ class BackboneConfig(StrictModel):
                 raise ValueError('The kernel size of each block must be a positive integer or a tuple of positive integers.')
             if not (isinstance(block[3], int) and block[3] > 0) and not (isinstance(block[3], tuple) and all(isinstance(x, int) and x > 0 for x in block[3])):
                 raise ValueError('The stride of each block must be a positive integer or a tuple of positive integers.')
+            
+            if isinstance(block[2], int):
+                v[idx] = (block[0], block[1], (block[2],) * 3, block[3])
+            if isinstance(block[3], int):
+                v[idx] = (block[0], block[1], block[2], (block[3],) * 3)
 
         return v
     

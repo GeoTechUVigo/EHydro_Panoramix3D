@@ -1,4 +1,4 @@
-weights_file: /home/samuel/Panoramix3D_data/Panoramix3D_base_V3/weights/checkpoints/Panoramix3D_base_V3_epoch_1.pth
+weights_file: /workspace/weights/Panoramix3D_base_V4_epoch_1.pth
 backbone:
   resnet_blocks:
     - [3, 16, 3, 1]
