@@ -334,7 +334,7 @@ class Panoramix3DDataset(Dataset):
         specie_labels = specie_labels[indices]
 
         sizes = np.bincount(instance_labels)[instance_labels]
-        size_mask = (sizes >= self._cfg.min_tree_voxels) & ((instance_labels != 0) | (semantic_labels == 0)) 
+        size_mask = (sizes >= self._cfg.min_tree_voxels) # & ((instance_labels != 0) | (semantic_labels == 0)) 
         voxels = voxels[size_mask]
         feat = feat[size_mask]
         semantic_labels = semantic_labels[size_mask]

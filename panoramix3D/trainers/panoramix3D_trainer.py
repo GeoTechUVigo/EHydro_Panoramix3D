@@ -61,6 +61,7 @@ class Panoramix3DTrainer:
     def __init__(self, cfg: AppConfig):
         self._cfg = cfg
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._foreground_classes = torch.tensor(cfg.model.foreground_classes, dtype=torch.long, device=self._device)
 
         root_folder = Path(self._cfg.trainer.root)
         if not root_folder.exists():
@@ -442,7 +443,7 @@ class Panoramix3DTrainer:
         """
         inputs = feed_dict["inputs"].to(self._device)
         semantic_labels = feed_dict["semantic_labels"].to(self._device)
-        semantic_mask = semantic_labels.F != 0
+        semantic_mask = torch.isin(semantic_labels.F, self._foreground_classes)
 
         specie_labels = feed_dict["specie_labels"].to(self._device)
         specie_labels.C = specie_labels.C[semantic_mask]
@@ -552,16 +553,17 @@ class Panoramix3DTrainer:
     @torch.no_grad()
     def _log_mean_stats(self, step: int, stats: dict) -> None:
         header = '| Class | IoU | Precision | Recall | F1 |\n|-|-|-|-|-|\n'
-        row = f'| Terrain | {stats["semantic_iou"][0]:.3f} | {stats["semantic_precision"][0]:.3f} | {stats["semantic_recall"][0]:.3f} | {stats["semantic_f1"][0]:.3f} |\n'
-        row += f'| Stem | {stats["semantic_iou"][1]:.3f} | {stats["semantic_precision"][1]:.3f} | {stats["semantic_recall"][1]:.3f} | {stats["semantic_f1"][1]:.3f} |\n'
-        row += f'| Canopy | {stats["semantic_iou"][2]:.3f} | {stats["semantic_precision"][2]:.3f} | {stats["semantic_recall"][2]:.3f} | {stats["semantic_f1"][2]:.3f} |\n'
+        row = ''
+        for i, semantic_class in enumerate(self._cfg.dataset.semantic_classes):
+            row += f'| {semantic_class.name} | {stats["semantic_iou"][i]:.3f} | {stats["semantic_precision"][i]:.3f} | {stats["semantic_recall"][i]:.3f} | {stats["semantic_f1"][i]:.3f} |\n'
         row += f'| Mean | {stats["semantic_iou"].mean():.3f} | {stats["semantic_precision"].mean():.3f} | {stats["semantic_recall"].mean():.3f} | {stats["semantic_f1"].mean():.3f} |\n'
 
         self._writer.add_text('Val_Semantic/Mean_Results', header + row, step)
 
         header = '| Class | IoU | Precision | Recall | F1 |\n|-|-|-|-|-|\n'
-        row = f'| Conifer | {stats["specie_iou"][0]:.3f} | {stats["specie_precision"][0]:.3f} | {stats["specie_recall"][0]:.3f} | {stats["specie_f1"][0]:.3f} |\n'
-        row += f'| Deciduous | {stats["specie_iou"][1]:.3f} | {stats["specie_precision"][1]:.3f} | {stats["specie_recall"][1]:.3f} | {stats["specie_f1"][1]:.3f} |\n'
+        row = ''
+        for i, specie_class in enumerate(self._cfg.dataset.specie_classes):
+            row += f'| {specie_class.name} | {stats["specie_iou"][i]:.3f} | {stats["specie_precision"][i]:.3f} | {stats["specie_recall"][i]:.3f} | {stats["specie_f1"][i]:.3f} |\n'
         row += f'| Mean | {stats["specie_iou"].mean():.3f} | {stats["specie_precision"].mean():.3f} | {stats["specie_recall"].mean():.3f} | {stats["specie_f1"].mean():.3f} |\n'
 
         self._writer.add_text('Val_Specie/Mean_Results', header + row, step)
@@ -585,7 +587,7 @@ class Panoramix3DTrainer:
         semantic_output = torch.argmax(result['semantic_output'].F.cpu(), dim=1).numpy()
         semantic_labels = result['semantic_labels'].F.cpu().numpy()
 
-        semantic_mask = semantic_labels != 0
+        semantic_mask = np.isin(semantic_labels, self._cfg.model.foreground_classes)
         specie_output = np.zeros((voxels.shape[0],), dtype=int)
         specie_output[semantic_mask] = torch.argmax(result['specie_output'].F.cpu(), dim=1).numpy() + 1
         specie_labels = np.zeros((voxels.shape[0],), dtype=int)
@@ -643,7 +645,8 @@ class Panoramix3DTrainer:
         class_colormap = np.array([semantic_cls.color for semantic_cls in self._cfg.dataset.semantic_classes]).astype(np.float32) / 255.0
         species_colormap = np.vstack([reserved_colors[0], [specie_cls.color for specie_cls in self._cfg.dataset.specie_classes]]).astype(np.float32) / 255.0
 
-        for idx in np.unique(batch_idx):
+        unique_batches = np.unique(batch_idx)
+        for idx in unique_batches:
             mask = batch_idx == idx
             cloud_voxels = voxels[mask]
 
@@ -665,21 +668,21 @@ class Panoramix3DTrainer:
             mask = centroid_batch_idx == idx
 
             pcd_gt.points = o3d.utility.Vector3dVector(cloud_voxels)
-            pcd_gt.translate((20 / self._cfg.dataset.voxel_size, 0, 0))
+            pcd_gt.translate((30 / self._cfg.dataset.voxel_size, 0, 0))
             pcd_pred.points = o3d.utility.Vector3dVector(cloud_voxels)
 
             colors = class_colormap[cloud_semantic_labels]
             pcd_gt.colors = o3d.utility.Vector3dVector(colors)
             colors = class_colormap[cloud_semantic_output]
             pcd_pred.colors = o3d.utility.Vector3dVector(colors)
-            self._writer.add_3d("Semantic Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step)
+            self._writer.add_3d("Semantic Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
             # self._writer.add_3d("Val_Semantic/GT_pointcloud", to_dict_batch([pcd_gt]), step)
 
             colors = species_colormap[cloud_specie_labels]
             pcd_gt.colors = o3d.utility.Vector3dVector(colors)
             colors = species_colormap[cloud_specie_output]
             pcd_pred.colors = o3d.utility.Vector3dVector(colors)
-            self._writer.add_3d("Specie Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step)
+            self._writer.add_3d("Specie Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
 
             cmap = plt.get_cmap('viridis')
             cmap_spheres = plt.get_cmap('inferno')
@@ -688,13 +691,13 @@ class Panoramix3DTrainer:
             colors = cmap(cloud_centroid_score_output[:, 0])[:, :3]
             pcd_pred.colors = o3d.utility.Vector3dVector(colors)
 
-            self._writer.add_3d("Centroid Prediction", to_dict_batch([pcd_pred + pcd_gt]), step)
+            self._writer.add_3d("Centroid Prediction", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
 
             voxels_disp_output = cloud_voxels + cloud_offset_output
             voxels_disp_labels = cloud_voxels + cloud_offset_labels
 
             pcd_gt.points = o3d.utility.Vector3dVector(voxels_disp_labels)
-            pcd_gt.translate((20 / self._cfg.dataset.voxel_size, 0, 0))
+            pcd_gt.translate((30 / self._cfg.dataset.voxel_size, 0, 0))
             pcd_pred.points = o3d.utility.Vector3dVector(voxels_disp_output)
 
             colors = class_colormap[cloud_semantic_labels]
@@ -702,10 +705,10 @@ class Panoramix3DTrainer:
             colors = class_colormap[cloud_semantic_output]
             pcd_pred.colors = o3d.utility.Vector3dVector(colors)
 
-            self._writer.add_3d("Offset Prediction", to_dict_batch([pcd_pred + pcd_gt]), step)
+            self._writer.add_3d("Offset Prediction", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
 
             pcd_gt.points = o3d.utility.Vector3dVector(cloud_voxels)
-            pcd_gt.translate((20 / self._cfg.dataset.voxel_size, 0, 0))
+            pcd_gt.translate((30 / self._cfg.dataset.voxel_size, 0, 0))
             pcd_pred.points = o3d.utility.Vector3dVector(cloud_voxels)
 
             colors = np.array([id2color[i] for i in cloud_instance_labels], dtype=np.float64)
@@ -713,7 +716,7 @@ class Panoramix3DTrainer:
             colors = np.array([id2color[i] for i in cloud_instance_output], dtype=np.float64)
             pcd_pred.colors = o3d.utility.Vector3dVector(colors)
 
-            self._writer.add_3d("Instance Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step)
+            self._writer.add_3d("Instance Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
 
     def train(self) -> None:
         """

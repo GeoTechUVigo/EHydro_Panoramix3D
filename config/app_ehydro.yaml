@@ -1,5 +1,5 @@
 name: Panoramix3D
 description: Panoramix3D configuration file
-model: !include model/model.yaml
-dataset: !include data/mixed_dataset.yaml
+model: !include model/model_ehydro.yaml
+dataset: !include data/ehydro_dataset.yaml
 trainer: !include trainer/train.yaml

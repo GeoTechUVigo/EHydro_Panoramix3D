@@ -186,6 +186,8 @@ ScreenCamera*.json
 DepthCamera*.json
 RenderOption*.json
 
+weights/
+
 # VS Code
 .vscode/
 .github/

@@ -19,7 +19,7 @@ class CloudProcessor:
         self._input_folder = Path('/workspace/input')
         self._output_folder = Path('/workspace/output')
 
-        self._chunk_size = 30
+        self._chunk_size = 100
         self._min_chunk_size = 15
         self._min_points_per_pc = 2000
         self._voxel_size = 0.3
@@ -28,6 +28,7 @@ class CloudProcessor:
         self._output_folder.mkdir(parents=True, exist_ok=True)
 
         self._config = ModelConfig.from_yaml('/workspace/Panoramix3D/config/model/inference.yaml')
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def _chunkerize(self, file: LasData, ext: str):
         points = file.points
@@ -62,8 +63,7 @@ class CloudProcessor:
 
         model = Panoramix3D.from_config(self._config)
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
+        model.to(self._device)
         model.eval()
 
         for point_cloud in point_clouds:
@@ -81,12 +81,13 @@ class CloudProcessor:
                     voxels -= min_coords
 
                     intensity = np.array(chunk.intensity)[:, None]
-                    min_intensity = np.min(intensity)
-                    max_intensity = np.max(intensity)
-                    i_norm = (intensity - min_intensity) / (max_intensity - min_intensity)
+                    red = np.array(chunk.red)[:, None]
+                    green = np.array(chunk.green)[:, None]
+                    blue = np.array(chunk.blue)[:, None]
+                    feats = np.hstack((intensity, red, green, blue))
 
                     voxels, indices, inverse_map = sparse_quantize(voxels, self._voxel_size, return_index=True, return_inverse=True)
-                    i_norm = i_norm[indices]
+                    feats = feats[indices]
 
                     min_x, max_x = chunk.x.min(), chunk.x.max()
                     min_y, max_y = chunk.y.min(), chunk.y.max()
@@ -96,10 +97,10 @@ class CloudProcessor:
                     if (max_x - min_x) < self._min_chunk_size or (max_y - min_y) < self._min_chunk_size:
                         continue
 
-                    voxels = torch.tensor(voxels, dtype=torch.int).to(device)
+                    voxels = torch.tensor(voxels, dtype=torch.int).to(self._device)
                     batch_index = torch.zeros((voxels.shape[0], 1), dtype=torch.int, device=voxels.device)
                     voxels = torch.cat([batch_index, voxels], dim=1)
-                    feat = torch.tensor(i_norm.astype(np.float32), dtype=torch.float).to(device)
+                    feat = torch.tensor(feats.astype(np.float32), dtype=torch.float).to(self._device)
 
                     inputs = SparseTensor(coords=voxels, feats=feat)
 
@@ -111,17 +112,17 @@ class CloudProcessor:
                     semantic_output_raw, specie_output_raw, _, _, _, instance_output_raw = result
 
                     semantic_output = torch.argmax(semantic_output_raw.F.cpu(), dim=1).numpy()
-                    ng_mask = semantic_output != 0
+                    fg_mask = np.isin(semantic_output, self._config.foreground_classes)
 
                     specie_output = np.zeros_like(semantic_output)
-                    specie_output[ng_mask] = torch.argmax(specie_output_raw.F.cpu(), dim=1).numpy() + 1
+                    specie_output[fg_mask] = torch.argmax(specie_output_raw.F.cpu(), dim=1).numpy() + 1
 
                     instance_output_full = np.zeros_like(semantic_output)
 
                     if instance_output_raw.F.shape[1] > 0:
                         instance_output = torch.argmax(instance_output_raw.F.cpu(), dim=1).numpy()
                         max_label = instance_output.max()
-                        instance_output_full[ng_mask] = instance_output + instance_offset
+                        instance_output_full[fg_mask] = instance_output + instance_offset
                         instance_offset += max_label + 1
 
                     semantic_output = semantic_output[inverse_map]

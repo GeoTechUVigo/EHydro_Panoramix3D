@@ -88,6 +88,9 @@ class Panoramix3D(nn.Module):
             specie_dim=cfg.specie_head.num_classes
         )
 
+        foreground_classes = torch.tensor(cfg.foreground_classes)
+        self.register_buffer('foreground_classes', foreground_classes, persistent=False)
+
     def forward(self, x: SparseTensor, semantic_labels: SparseTensor = None, centroid_score_labels: SparseTensor = None, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
         """
         Forward pass through the multi-task network.
@@ -142,11 +145,11 @@ class Panoramix3D(nn.Module):
         else:
             semantic_labels = semantic_labels.F
 
-        ng_mask = (semantic_labels != 0)
-        specie_output = self.specie_head(feats, mask=ng_mask)
-        offset_output = self.offset_head(feats, mask=ng_mask, offset_labels=offset_labels)
-        centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, mask=ng_mask, centroid_score_labels=centroid_score_labels)
-        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, ng_mask, semantic_output, specie_output, offset_output)
+        fg_mask = torch.isin(semantic_labels, self.foreground_classes)
+        specie_output = self.specie_head(feats, mask=fg_mask)
+        offset_output = self.offset_head(feats, mask=fg_mask, offset_labels=offset_labels)
+        centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, mask=fg_mask, centroid_score_labels=centroid_score_labels)
+        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, fg_mask, semantic_output, specie_output, offset_output)
 
         return semantic_output, specie_output, centroid_scores, offset_output, centroid_confidences, instance_output
 

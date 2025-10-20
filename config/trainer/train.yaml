@@ -1,7 +1,7 @@
 root: /home/samuel/Panoramix3D_data
-version_name: 'Panoramix3D_base_V4'
+version_name: 'Panoramix3D_ehydro_V1'
 mode: 'train'
-batch_size: 8
+batch_size: 16
 train_schedule:
   - epochs: 1
     lr_scale: 1.0

@@ -62,6 +62,7 @@ class ModelConfig(MutableModel):
     weights_file: Optional[str] = Field(None, description="Path to pre-trained weights file.")
     backbone: BackboneConfig = Field(default_factory=BackboneConfig, description="Backbone network configuration.")
     semantic_head: SemanticHeadConfig = Field(default_factory=SemanticHeadConfig, description="Semantic head configuration.")
+    foreground_classes: List[int] = Field(default_factory=lambda: [], description="List of semantic class indices considered as foreground.")
     specie_head: SpecieHeadConfig = Field(default_factory=SpecieHeadConfig, description="Specie head configuration.")
     centroid_head: CentroidHeadConfig = Field(default_factory=CentroidHeadConfig, description="Centroid head configuration.")
     instance_head: InstanceHeadConfig = Field(default_factory=InstanceHeadConfig, description="Instance head configuration.")
