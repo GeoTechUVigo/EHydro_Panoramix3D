@@ -89,6 +89,7 @@ class Panoramix3DTrainer:
         self._optimizer = torch.optim.AdamW([
             {'params': self._model.encoder.parameters(), 'lr': self._cfg.trainer.learning_rates.backbone},
             {'params': self._model.semantic_head.parameters(), 'lr': self._cfg.trainer.learning_rates.semantic},
+            {'params': self._model.classification_head.parameters(), 'lr': self._cfg.trainer.learning_rates.classification},
             {'params': self._model.offset_head.parameters(), 'lr': self._cfg.trainer.learning_rates.offset},
             {'params': self._model.centroid_head.parameters(), 'lr': self._cfg.trainer.learning_rates.centroid},
             {'params': self._model.instance_head.parameters(), 'lr': self._cfg.trainer.learning_rates.instance}
@@ -99,7 +100,7 @@ class Panoramix3DTrainer:
             self._load_ckpt(self._checkpoint_folder / f'{self._cfg.trainer.version_name}_epoch_{self._cfg.trainer.start_epoch}.pth')
 
         self._criterion_semantic = nn.CrossEntropyLoss()
-        self._criterion_specie = nn.CrossEntropyLoss()
+        self._criterion_classification = nn.CrossEntropyLoss()
         self._criterion_centroid = CenterNetFocalLoss()
         self._criterion_offset = nn.SmoothL1Loss(beta=self._cfg.trainer.loss_coeffs.offset_smooth_l1_beta_loss_coef)
         self._criterion_instance = HungarianInstanceLoss(
@@ -114,10 +115,10 @@ class Panoramix3DTrainer:
         self._metric_semantic_recall = Recall(task='multiclass', num_classes=self._cfg.model.semantic_head.num_classes, average='none').to(device=self._device)
         self._metric_semantic_f1 = F1Score(task='multiclass', num_classes=self._cfg.model.semantic_head.num_classes, average='none').to(device=self._device)
 
-        self._metric_specie_iou = MulticlassJaccardIndex(num_classes=self._cfg.model.specie_head.num_classes, average='none').to(device=self._device)
-        self._metric_specie_precision = Precision(task='multiclass', num_classes=self._cfg.model.specie_head.num_classes, average='none').to(device=self._device)
-        self._metric_specie_recall = Recall(task='multiclass', num_classes=self._cfg.model.specie_head.num_classes, average='none').to(device=self._device)
-        self._metric_specie_f1 = F1Score(task='multiclass', num_classes=self._cfg.model.specie_head.num_classes, average='none').to(device=self._device)
+        self._metric_classification_iou = MulticlassJaccardIndex(num_classes=self._cfg.model.classification_head.num_classes, average='none').to(device=self._device)
+        self._metric_classification_precision = Precision(task='multiclass', num_classes=self._cfg.model.classification_head.num_classes, average='none').to(device=self._device)
+        self._metric_classification_recall = Recall(task='multiclass', num_classes=self._cfg.model.classification_head.num_classes, average='none').to(device=self._device)
+        self._metric_classification_f1 = F1Score(task='multiclass', num_classes=self._cfg.model.classification_head.num_classes, average='none').to(device=self._device)
 
         # self._writer = SummaryWriter(log_dir=self._logs_folder, flush_secs=30)
         total_params = sum(p.numel() for p in self._model.parameters())
@@ -191,8 +192,8 @@ class Panoramix3DTrainer:
             self,
             semantic_output: SparseTensor,
             semantic_labels: SparseTensor,
-            specie_output: SparseTensor,
-            specie_labels: SparseTensor,
+            classification_output: SparseTensor,
+            classification_labels: SparseTensor,
             centroid_score_output: SparseTensor,
             centroid_score_labels: SparseTensor,
             offset_output: SparseTensor,
@@ -221,7 +222,7 @@ class Panoramix3DTrainer:
         """
         
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F) * self._cfg.trainer.loss_coeffs.semantic_loss_coeff
-        loss_specie = self._criterion_specie(specie_output.F, specie_labels.F) * self._cfg.trainer.loss_coeffs.specie_loss_coeff
+        loss_classification = self._criterion_classification(classification_output.F, classification_labels.F) * self._cfg.trainer.loss_coeffs.classification_loss_coeff
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F) * self._cfg.trainer.loss_coeffs.centroid_loss_coeff
         loss_offset = self._criterion_offset(offset_output.F, offset_labels.F) * self._cfg.trainer.loss_coeffs.offset_loss_coeff
         loss_inst, remap_info = self._criterion_instance(instance_output,
@@ -229,12 +230,12 @@ class Panoramix3DTrainer:
                                                          centroid_batches=centroid_confidences.C[:, 0])
 
         total_loss_inst = loss_inst['total_loss'] * self._cfg.trainer.loss_coeffs.instance_loss_coeff
-        total_loss = loss_sem + loss_specie + loss_centroid + loss_offset + total_loss_inst
+        total_loss = loss_sem + loss_classification + loss_centroid + loss_offset + total_loss_inst
 
         return {
             'total_loss': total_loss,
             'semantic_loss': loss_sem,
-            'specie_loss': loss_specie,
+            'classification_loss': loss_classification,
             'centroid_loss': loss_centroid,
             'offset_loss': loss_offset,
             'instance_loss': total_loss_inst,
@@ -285,29 +286,29 @@ class Panoramix3DTrainer:
         return semantic_iou, semantic_precision, semantic_recall, semantic_f1
     
     @torch.no_grad()
-    def _compute_specie_metrics(
+    def _compute_classification_metrics(
         self,
-        specie_output: SparseTensor,
-        specie_labels: SparseTensor
+        classification_output: SparseTensor,
+        classification_labels: SparseTensor
     ) -> Dict:
         """
-        Compute comprehensive specie segmentation metrics including IoU,
+        Compute comprehensive classification metrics including IoU,
         precision, recall, and F1-score for each class and overall averages.
         
         Args:
-            specie_output: Model predictions for specie segmentation
-            specie_labels: Ground truth specie class labels
+            classification_output: Model predictions for classification
+            classification_labels: Ground truth classification labels
 
         Returns:
             Tuple of (IoU, precision, recall, F1) tensors for each class
         """
-        specie_iou = self._metric_specie_iou(specie_output.F, specie_labels.F)
+        classification_iou = self._metric_classification_iou(classification_output.F, classification_labels.F)
 
-        specie_precision = self._metric_specie_precision(specie_output.F, specie_labels.F)
-        specie_recall = self._metric_specie_recall(specie_output.F, specie_labels.F)
-        specie_f1 = self._metric_specie_f1(specie_output.F, specie_labels.F)
+        classification_precision = self._metric_classification_precision(classification_output.F, classification_labels.F)
+        classification_recall = self._metric_classification_recall(classification_output.F, classification_labels.F)
+        classification_f1 = self._metric_classification_f1(classification_output.F, classification_labels.F)
 
-        return specie_iou, specie_precision, specie_recall, specie_f1
+        return classification_iou, classification_precision, classification_recall, classification_f1
 
     @torch.no_grad()
     def _compute_instance_metrics(
@@ -365,8 +366,8 @@ class Panoramix3DTrainer:
             self,
             semantic_output: SparseTensor,
             semantic_labels: SparseTensor,
-            specie_output: SparseTensor,
-            specie_labels: SparseTensor,
+            classification_output: SparseTensor,
+            classification_labels: SparseTensor,
             centroid_confidences: SparseTensor,
             instance_output: SparseTensor,
             instance_labels: SparseTensor,
@@ -389,7 +390,7 @@ class Panoramix3DTrainer:
         """
 
         semantic_iou, semantic_precision, semantic_recall, semantic_f1 = self._compute_semantic_metrics(semantic_output, semantic_labels)
-        specie_iou, specie_precision, specie_recall, specie_f1 = self._compute_specie_metrics(specie_output, specie_labels)
+        classification_iou, classification_precision, classification_recall, classification_f1 = self._compute_classification_metrics(classification_output, classification_labels)
         instance_tp, instance_fp, instance_fn, iou, instance_precision, instance_recall, instance_f1 = self._compute_instance_metrics(
             instance_output,
             instance_labels,
@@ -406,14 +407,14 @@ class Panoramix3DTrainer:
             'mean_semantic_recall': semantic_recall.mean(dim=0).item(),
             'semantic_f1': semantic_f1.cpu().numpy(),
             'mean_semantic_f1': semantic_f1.mean(dim=0).item(),
-            'specie_iou': specie_iou.cpu().numpy(),
-            'mean_specie_iou': specie_iou.mean(dim=0).item(),
-            'specie_precision': specie_precision.cpu().numpy(),
-            'mean_specie_precision': specie_precision.mean(dim=0).item(),
-            'specie_recall': specie_recall.cpu().numpy(),
-            'mean_specie_recall': specie_recall.mean(dim=0).item(),
-            'specie_f1': specie_f1.cpu().numpy(),
-            'mean_specie_f1': specie_f1.mean(dim=0).item(),
+            'classification_iou': classification_iou.cpu().numpy(),
+            'mean_classification_iou': classification_iou.mean(dim=0).item(),
+            'classification_precision': classification_precision.cpu().numpy(),
+            'mean_classification_precision': classification_precision.mean(dim=0).item(),
+            'classification_recall': classification_recall.cpu().numpy(),
+            'mean_classification_recall': classification_recall.mean(dim=0).item(),
+            'classification_f1': classification_f1.cpu().numpy(),
+            'mean_classification_f1': classification_f1.mean(dim=0).item(),
             'centroids_found': remap_info['num_predictions'],
             'centroids_gt': remap_info['num_instances'],
             'centroids_ratio': remap_info['num_predictions'] / remap_info['num_instances'] if remap_info['num_instances'] > 0 else float('nan'),
@@ -445,9 +446,9 @@ class Panoramix3DTrainer:
         semantic_labels = feed_dict["semantic_labels"].to(self._device)
         semantic_mask = torch.isin(semantic_labels.F, self._foreground_classes)
 
-        specie_labels = feed_dict["specie_labels"].to(self._device)
-        specie_labels.C = specie_labels.C[semantic_mask]
-        specie_labels.F = specie_labels.F[semantic_mask] - 1
+        classification_labels = feed_dict["classification_labels"].to(self._device)
+        classification_labels.C = classification_labels.C[semantic_mask]
+        classification_labels.F = classification_labels.F[semantic_mask] - 1
 
         centroid_score_labels = feed_dict["centroid_score_labels"].to(self._device)
         centroid_score_labels.C = centroid_score_labels.C[semantic_mask]
@@ -465,12 +466,12 @@ class Panoramix3DTrainer:
             self._optimizer.zero_grad()
 
         with amp.autocast(enabled=True):
-            semantic_output, specie_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
+            semantic_output, classification_output, centroid_score_output, offset_output, centroid_confidences_output, instance_output = self._model(inputs, semantic_labels)
             loss = self._compute_loss(
                 semantic_output=semantic_output,
                 semantic_labels=semantic_labels,
-                specie_output=specie_output,
-                specie_labels=specie_labels,
+                classification_output=classification_output,
+                classification_labels=classification_labels,
                 centroid_score_output=centroid_score_output,
                 centroid_score_labels=centroid_score_labels,
                 offset_output=offset_output,
@@ -484,8 +485,8 @@ class Panoramix3DTrainer:
             stat = self._compute_metrics(
                 semantic_output=semantic_output,
                 semantic_labels=semantic_labels,
-                specie_output=specie_output,
-                specie_labels=specie_labels,
+                classification_output=classification_output,
+                classification_labels=classification_labels,
                 centroid_confidences=centroid_confidences_output,
                 instance_output=instance_output,
                 instance_labels=instance_labels,
@@ -495,8 +496,8 @@ class Panoramix3DTrainer:
         return {
             'semantic_labels': semantic_labels,
             'semantic_output': semantic_output,
-            'specie_labels': specie_labels,
-            'specie_output': specie_output,
+            'classification_labels': classification_labels,
+            'classification_output': classification_output,
             'centroid_score_labels': centroid_score_labels,
             'centroid_score_output': centroid_score_output,
             'centroid_confidences_output': centroid_confidences_output,
@@ -522,7 +523,7 @@ class Panoramix3DTrainer:
         """
         self._writer.add_scalar(f'{prefix}_Loss/1/Total_loss', loss['total_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Loss/2/Semantic_loss', loss['semantic_loss'].item(), step)
-        self._writer.add_scalar(f'{prefix}_Loss/3/Specie_loss', loss['specie_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/3/Classification_loss', loss['classification_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Loss/4/Centroid_loss', loss['centroid_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Loss/5/Offset_loss', loss['offset_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Loss/6/Instance_loss', loss['instance_loss'].item(), step)
@@ -534,10 +535,10 @@ class Panoramix3DTrainer:
         self._writer.add_scalar(f'{prefix}_Semantic/2/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
         self._writer.add_scalar(f'{prefix}_Semantic/3/Mean_semantic_Recall', stat['mean_semantic_recall'], step)
         self._writer.add_scalar(f'{prefix}_Semantic/4/Mean_semantic_F1', stat['mean_semantic_f1'], step)
-        self._writer.add_scalar(f'{prefix}_Specie/1/Mean_specie_IoU', stat['mean_specie_iou'], step)
-        self._writer.add_scalar(f'{prefix}_Specie/2/Mean_specie_Precision', stat['mean_specie_precision'], step)
-        self._writer.add_scalar(f'{prefix}_Specie/3/Mean_specie_Recall', stat['mean_specie_recall'], step)
-        self._writer.add_scalar(f'{prefix}_Specie/4/Mean_specie_F1', stat['mean_specie_f1'], step)
+        self._writer.add_scalar(f'{prefix}_Classification/1/Mean_classification_IoU', stat['mean_classification_iou'], step)
+        self._writer.add_scalar(f'{prefix}_Classification/2/Mean_classification_Precision', stat['mean_classification_precision'], step)
+        self._writer.add_scalar(f'{prefix}_Classification/3/Mean_classification_Recall', stat['mean_classification_recall'], step)
+        self._writer.add_scalar(f'{prefix}_Classification/4/Mean_classification_F1', stat['mean_classification_f1'], step)
         self._writer.add_scalar(f'{prefix}_Centroids/1/Centroids_found_ratio', stat['centroids_found'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
         self._writer.add_scalar(f'{prefix}_Centroids/2/Mean_centroid_confidence', stat['mean_centroid_confidence'], step)
         self._writer.add_scalar(f'{prefix}_Instance/1/Instances_matched_ratio', stat['instances_matched'] / stat['centroids_gt'] if stat['centroids_gt'] > 0 else float('nan'), step)
@@ -546,9 +547,10 @@ class Panoramix3DTrainer:
         self._writer.add_scalar(f'{prefix}_Instance/4/Instance_F1', stat['instance_f1'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/1/Backbone_LR', self._optimizer.param_groups[0]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/2/Semantic_LR', self._optimizer.param_groups[1]['lr'], step)
-        self._writer.add_scalar(f'{prefix}_Learning_Rate/3/Offset_LR', self._optimizer.param_groups[2]['lr'], step)
-        self._writer.add_scalar(f'{prefix}_Learning_Rate/4/Centroid_LR', self._optimizer.param_groups[3]['lr'], step)
-        self._writer.add_scalar(f'{prefix}_Learning_Rate/5/Instance_LR', self._optimizer.param_groups[4]['lr'], step)
+        self._writer.add_scalar(f'{prefix}_Learning_Rate/3/Classification_LR', self._optimizer.param_groups[2]['lr'], step)
+        self._writer.add_scalar(f'{prefix}_Learning_Rate/4/Offset_LR', self._optimizer.param_groups[3]['lr'], step)
+        self._writer.add_scalar(f'{prefix}_Learning_Rate/5/Centroid_LR', self._optimizer.param_groups[4]['lr'], step)
+        self._writer.add_scalar(f'{prefix}_Learning_Rate/6/Instance_LR', self._optimizer.param_groups[5]['lr'], step)
 
     @torch.no_grad()
     def _log_mean_stats(self, step: int, stats: dict) -> None:
@@ -562,11 +564,11 @@ class Panoramix3DTrainer:
 
         header = '| Class | IoU | Precision | Recall | F1 |\n|-|-|-|-|-|\n'
         row = ''
-        for i, specie_class in enumerate(self._cfg.dataset.specie_classes):
-            row += f'| {specie_class.name} | {stats["specie_iou"][i]:.3f} | {stats["specie_precision"][i]:.3f} | {stats["specie_recall"][i]:.3f} | {stats["specie_f1"][i]:.3f} |\n'
-        row += f'| Mean | {stats["specie_iou"].mean():.3f} | {stats["specie_precision"].mean():.3f} | {stats["specie_recall"].mean():.3f} | {stats["specie_f1"].mean():.3f} |\n'
+        for i, instance_class in enumerate(self._cfg.dataset.instance_classes):
+            row += f'| {instance_class.name} | {stats["classification_iou"][i]:.3f} | {stats["classification_precision"][i]:.3f} | {stats["classification_recall"][i]:.3f} | {stats["classification_f1"][i]:.3f} |\n'
+        row += f'| Mean | {stats["classification_iou"].mean():.3f} | {stats["classification_precision"].mean():.3f} | {stats["classification_recall"].mean():.3f} | {stats["classification_f1"].mean():.3f} |\n'
 
-        self._writer.add_text('Val_Specie/Mean_Results', header + row, step)
+        self._writer.add_text('Val_Classification/Mean_Results', header + row, step)
 
         header = 'IoU | Precision | Recall | F1 |\n|-|-|-|-|\n'
         row = f'{stats["instance_iou"]:.3f} | {stats["instance_precision"]:.3f} | {stats["instance_recall"]:.3f} | {stats["instance_f1"]:.3f} |\n'
@@ -588,10 +590,10 @@ class Panoramix3DTrainer:
         semantic_labels = result['semantic_labels'].F.cpu().numpy()
 
         semantic_mask = np.isin(semantic_labels, self._cfg.model.foreground_classes)
-        specie_output = np.zeros((voxels.shape[0],), dtype=int)
-        specie_output[semantic_mask] = torch.argmax(result['specie_output'].F.cpu(), dim=1).numpy() + 1
-        specie_labels = np.zeros((voxels.shape[0],), dtype=int)
-        specie_labels[semantic_mask] = result['specie_labels'].F.cpu().numpy()
+        classification_output = np.zeros((voxels.shape[0],), dtype=int)
+        classification_output[semantic_mask] = torch.argmax(result['classification_output'].F.cpu(), dim=1).numpy() + 1
+        classification_labels = np.zeros((voxels.shape[0],), dtype=int)
+        classification_labels[semantic_mask] = result['classification_labels'].F.cpu().numpy()
 
         centroid_score_output = np.zeros((voxels.shape[0], 1), dtype=float)
         centroid_score_output[semantic_mask] = result['centroid_score_output'].F.cpu().numpy()
@@ -643,7 +645,7 @@ class Panoramix3DTrainer:
         id2color[-1] = tuple(reserved_colors[0])
 
         class_colormap = np.array([semantic_cls.color for semantic_cls in self._cfg.dataset.semantic_classes]).astype(np.float32) / 255.0
-        species_colormap = np.vstack([reserved_colors[0], [specie_cls.color for specie_cls in self._cfg.dataset.specie_classes]]).astype(np.float32) / 255.0
+        classification_colormap = np.vstack([reserved_colors[0], [instance_cls.color for instance_cls in self._cfg.dataset.instance_classes]]).astype(np.float32) / 255.0
 
         unique_batches = np.unique(batch_idx)
         for idx in unique_batches:
@@ -653,8 +655,8 @@ class Panoramix3DTrainer:
             cloud_semantic_output = semantic_output[mask]
             cloud_semantic_labels = semantic_labels[mask]
 
-            cloud_specie_output = specie_output[mask]
-            cloud_specie_labels = specie_labels[mask]
+            cloud_classification_output = classification_output[mask]
+            cloud_classification_labels = classification_labels[mask]
 
             cloud_centroid_score_output = centroid_score_output[mask]
             cloud_centroid_score_labels = centroid_score_labels[mask]
@@ -678,11 +680,11 @@ class Panoramix3DTrainer:
             self._writer.add_3d("Semantic Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
             # self._writer.add_3d("Val_Semantic/GT_pointcloud", to_dict_batch([pcd_gt]), step)
 
-            colors = species_colormap[cloud_specie_labels]
+            colors = classification_colormap[cloud_classification_labels]
             pcd_gt.colors = o3d.utility.Vector3dVector(colors)
-            colors = species_colormap[cloud_specie_output]
+            colors = classification_colormap[cloud_classification_output]
             pcd_pred.colors = o3d.utility.Vector3dVector(colors)
-            self._writer.add_3d("Specie Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
+            self._writer.add_3d("Classification Segmentation", to_dict_batch([pcd_pred + pcd_gt]), step * len(unique_batches) + idx)
 
             cmap = plt.get_cmap('viridis')
             cmap_spheres = plt.get_cmap('inferno')
@@ -755,12 +757,14 @@ class Panoramix3DTrainer:
 
             self._optimizer.param_groups[0]['lr'] = self._cfg.trainer.learning_rates.backbone * lr_scale
             self._optimizer.param_groups[1]['lr'] = self._cfg.trainer.learning_rates.semantic * lr_scale
-            self._optimizer.param_groups[2]['lr'] = self._cfg.trainer.learning_rates.offset * lr_scale
-            self._optimizer.param_groups[3]['lr'] = self._cfg.trainer.learning_rates.centroid * lr_scale
-            self._optimizer.param_groups[4]['lr'] = self._cfg.trainer.learning_rates.instance * lr_scale
+            self._optimizer.param_groups[2]['lr'] = self._cfg.trainer.learning_rates.classification * lr_scale
+            self._optimizer.param_groups[3]['lr'] = self._cfg.trainer.learning_rates.offset * lr_scale
+            self._optimizer.param_groups[4]['lr'] = self._cfg.trainer.learning_rates.centroid * lr_scale
+            self._optimizer.param_groups[5]['lr'] = self._cfg.trainer.learning_rates.instance * lr_scale
 
             self._freeze_params(self._model.encoder, 'backbone' in freeze_modules)
             self._freeze_params(self._model.semantic_head, 'semantic' in freeze_modules)
+            self._freeze_params(self._model.classification_head, 'classification' in freeze_modules)
             self._freeze_params(self._model.offset_head, 'offset' in freeze_modules)
             self._freeze_params(self._model.centroid_head, 'centroid' in freeze_modules)
             self._freeze_params(self._model.instance_head, 'instance' in freeze_modules)
@@ -774,7 +778,7 @@ class Panoramix3DTrainer:
                     'TP': f"{result['stat']['tp']} / {result['stat']['centroids_gt']}",
                     'Total': result['loss']['total_loss'].item(),
                     'Semantic': result['loss']['semantic_loss'].item(),
-                    'Specie': result['loss']['specie_loss'].item(),
+                    'Classification': result['loss']['classification_loss'].item(),
                     'Centroid': result['loss']['centroid_loss'].item(),
                     'Offset': result['loss']['offset_loss'].item(),
                     'Instance': result['loss']['instance_loss'].item()
@@ -820,10 +824,10 @@ class Panoramix3DTrainer:
             'semantic_precision': [],
             'semantic_recall': [],
             'semantic_f1': [],
-            'specie_iou': [],
-            'specie_precision': [],
-            'specie_recall': [],
-            'specie_f1': [],
+            'classification_iou': [],
+            'classification_precision': [],
+            'classification_recall': [],
+            'classification_f1': [],
             'instance_iou': [],
             'instance_precision': [],
             'instance_recall': [],
@@ -843,7 +847,7 @@ class Panoramix3DTrainer:
                     'TP': f"{result['stat']['tp']} / {result['stat']['centroids_gt']}",
                     'Total': result['loss']['total_loss'].item(),
                     'Semantic': result['loss']['semantic_loss'].item(),
-                    'Specie': result['loss']['specie_loss'].item(),
+                    'Classification': result['loss']['classification_loss'].item(),
                     'Centroid': result['loss']['centroid_loss'].item(),
                     'Offset': result['loss']['offset_loss'].item(),
                     'Instance': result['loss']['instance_loss'].item()
@@ -853,10 +857,10 @@ class Panoramix3DTrainer:
                 stats['semantic_precision'].append(result['stat']['semantic_precision'])
                 stats['semantic_recall'].append(result['stat']['semantic_recall'])
                 stats['semantic_f1'].append(result['stat']['semantic_f1'])
-                stats['specie_iou'].append(result['stat']['specie_iou'])
-                stats['specie_precision'].append(result['stat']['specie_precision'])
-                stats['specie_recall'].append(result['stat']['specie_recall'])
-                stats['specie_f1'].append(result['stat']['specie_f1'])
+                stats['classification_iou'].append(result['stat']['classification_iou'])
+                stats['classification_precision'].append(result['stat']['classification_precision'])
+                stats['classification_recall'].append(result['stat']['classification_recall'])
+                stats['classification_f1'].append(result['stat']['classification_f1'])
                 stats['instance_iou'].append(result['stat']['instance_iou'])
                 stats['instance_precision'].append(result['stat']['instance_precision'])
                 stats['instance_recall'].append(result['stat']['instance_recall'])

@@ -18,7 +18,7 @@ semantic_classes:
   - name: canopy
     id: 2
     color: [0, 128, 0]
-specie_classes:
+instance_classes:
   - name: conifer
     id: 1
     color: [255, 165, 0]

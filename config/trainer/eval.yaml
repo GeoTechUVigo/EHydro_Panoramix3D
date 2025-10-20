@@ -20,7 +20,7 @@ num_workers: 4
 weight_decay: 0.05
 loss_coeffs:
   semantic_loss_coeff: 2.0
-  specie_loss_coeff: 2.0
+  classification_loss_coeff: 2.0
   centroid_loss_coeff: 1.0
   offset_loss_coeff: 1.0
   offset_smooth_l1_beta_loss_coef: 5.0

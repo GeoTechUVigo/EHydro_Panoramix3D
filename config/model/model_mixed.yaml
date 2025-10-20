@@ -11,7 +11,7 @@ backbone:
 semantic_head:
   num_classes: 3
 foreground_classes: [2]
-specie_head:
+classification_head:
   num_classes: 2
 centroid_head:
   instance_density: 0.01

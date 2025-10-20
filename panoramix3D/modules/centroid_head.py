@@ -123,7 +123,7 @@ class CentroidHead(nn.Module):
 
         return peak_indices, SparseTensor(coords=peak_coords, feats=peak_scores)
 
-    def forward(self, feats: List[SparseTensor], mask: Tensor, centroid_score_labels: SparseTensor = None) -> Tuple[SparseTensor, Tensor, SparseTensor]:
+    def forward(self, feats: List[SparseTensor], mask: Tensor) -> Tuple[SparseTensor, Tensor, SparseTensor]:
         """
         Forward pass for centroid detection: decode features to scores and find peaks.
 
@@ -132,9 +132,6 @@ class CentroidHead(nn.Module):
                 different resolution levels for multi-scale feature decoding.
             mask: Boolean tensor [N_voxels] indicating which voxels should be
                 considered for centroid prediction (e.g., non-ground points).
-            centroid_score_labels: Optional SparseTensor with ground truth
-                centroid scores. When provided, peak detection uses GT instead
-                of predictions (useful during training for consistent supervision).
 
         Returns:
             A tuple (centroid_scores, peak_indices, centroid_confidences) where:
@@ -154,5 +151,5 @@ class CentroidHead(nn.Module):
         centroid_scores = self.decoder(feats, mask=mask)
         centroid_scores.F = self.act(centroid_scores.F)
 
-        peak_indices, centroid_confidences = self._find_centroid_peaks(centroid_scores if centroid_score_labels is None else centroid_score_labels)
+        peak_indices, centroid_confidences = self._find_centroid_peaks(centroid_scores)
         return centroid_scores, peak_indices, centroid_confidences

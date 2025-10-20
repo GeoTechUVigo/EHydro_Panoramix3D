@@ -51,14 +51,14 @@ class InstanceHead(nn.Module):
             ],
             descriptor_dim: int = 16,
             semantic_dim: int = 3,
-            specie_dim: int = 2
+            classification_dim: int = 2
         ):
         super().__init__()
 
         self.cluster_descriptor = FeatDecoder(
             blocks=resnet_blocks,
             out_dim=descriptor_dim,
-            aux_dim=semantic_dim + specie_dim,
+            aux_dim=semantic_dim + classification_dim,
             bias=True,
             relu=True
         )
@@ -107,7 +107,7 @@ class InstanceHead(nn.Module):
             centroid_confidences: SparseTensor,
             ng_mask: Tensor,
             semantic_output: SparseTensor,
-            specie_output: SparseTensor,
+            classification_output: SparseTensor,
             offset_output: SparseTensor
         ) -> SparseTensor:
         """
@@ -139,7 +139,7 @@ class InstanceHead(nn.Module):
             - Logits are clamped to [-10, 10]
             - Processing is done independently per batch to handle variable centroid counts and mitigate memory usage
         """
-        voxel_descriptors = self.voxel_descriptors = self.cluster_descriptor(feats, mask=ng_mask, aux=[semantic_output.F[ng_mask], specie_output.F])
+        voxel_descriptors = self.voxel_descriptors = self.cluster_descriptor(feats, mask=ng_mask, aux=[semantic_output.F[ng_mask], classification_output.F])
         if peak_indices.size(0) == 0:
             return SparseTensor(coords=voxel_descriptors.C, feats=torch.empty(voxel_descriptors.F.size(0), 0, dtype=centroid_confidences.F.dtype, device=centroid_confidences.F.device))
 

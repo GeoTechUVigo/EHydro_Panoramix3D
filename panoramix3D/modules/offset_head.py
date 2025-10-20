@@ -82,22 +82,8 @@ class OffsetHead(nn.Module):
         out_coords = scatter_mean(new_coords.float(), idx_query_long, dim=0).int()
 
         return out_coords, idx_query_long
-        
-        '''
-        idx_query = idx_query_long.to(torch.int32)
 
-        #idx_query      = spf.sphashquery(pc_hash, voxel_hash)
-        counts         = spf.spcount(idx_query, voxel_hash.numel())
-        out_coords     = spf.spvoxelize(new_coords.float(), idx_query, counts).int()
-
-        out_hash = spf.sphash(out_coords)
-        perm = spf.sphashquery(voxel_hash, out_hash)
-        out_coords = out_coords[perm]
-
-        return out_coords, idx_query_long
-        '''
-
-    def forward(self, feats: List[SparseTensor], mask: Tensor, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, Tensor, Tensor]:
+    def forward(self, feats: List[SparseTensor], mask: Tensor) -> Tuple[SparseTensor, Tensor, Tensor]:
         """
         Forward pass for offset prediction and revoxelization.
 
@@ -125,6 +111,5 @@ class OffsetHead(nn.Module):
             - The inv_map enables subsequent cluster-wise feature aggregation.
         """
         offsets = self.decoder(feats, mask=mask)
-        # out_coords, inv_map = self._revoxelize(offsets if offset_labels is None else offset_labels)
 
-        return offsets  #, out_coords, inv_map
+        return offsets

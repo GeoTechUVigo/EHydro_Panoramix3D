@@ -2,6 +2,7 @@ import torch
 
 from torch import nn
 from torchsparse import SparseTensor
+from torch_scatter import scatter_mean
 
 from typing import Tuple
 from pathlib import Path
@@ -63,9 +64,9 @@ class Panoramix3D(nn.Module):
             bias=True
         )
 
-        self.specie_head = FeatDecoder(
+        self.classification_head = FeatDecoder(
             blocks=cfg.backbone.resnet_blocks,
-            out_dim=cfg.specie_head.num_classes,
+            out_dim=cfg.classification_head.num_classes,
             bias=True
         )
 
@@ -85,13 +86,13 @@ class Panoramix3D(nn.Module):
             resnet_blocks=cfg.backbone.resnet_blocks,
             descriptor_dim=cfg.instance_head.descriptor_dim,
             semantic_dim=cfg.semantic_head.num_classes,
-            specie_dim=cfg.specie_head.num_classes
+            classification_dim=cfg.classification_head.num_classes
         )
 
         foreground_classes = torch.tensor(cfg.foreground_classes)
         self.register_buffer('foreground_classes', foreground_classes, persistent=False)
 
-    def forward(self, x: SparseTensor, semantic_labels: SparseTensor = None, centroid_score_labels: SparseTensor = None, offset_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
+    def forward(self, x: SparseTensor, semantic_labels: SparseTensor = None) -> Tuple[SparseTensor, SparseTensor, SparseTensor, SparseTensor, SparseTensor]:
         """
         Forward pass through the multi-task network.
 
@@ -146,12 +147,17 @@ class Panoramix3D(nn.Module):
             semantic_labels = semantic_labels.F
 
         fg_mask = torch.isin(semantic_labels, self.foreground_classes)
-        specie_output = self.specie_head(feats, mask=fg_mask)
-        offset_output = self.offset_head(feats, mask=fg_mask, offset_labels=offset_labels)
-        centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, mask=fg_mask, centroid_score_labels=centroid_score_labels)
-        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, fg_mask, semantic_output, specie_output, offset_output)
+        classification_output = self.classification_head(feats, mask=fg_mask)
+        offset_output = self.offset_head(feats, mask=fg_mask)
+        centroid_scores, peak_indices, centroid_confidences = self.centroid_head(feats, mask=fg_mask)
+        instance_output = self.instance_head(feats, peak_indices, centroid_confidences, fg_mask, semantic_output, classification_output, offset_output)
 
-        return semantic_output, specie_output, centroid_scores, offset_output, centroid_confidences, instance_output
+        if instance_output.F.size(0) > 0 and instance_output.F.size(1) > 0:
+            with torch.no_grad():
+                instance_labels = torch.argmax(instance_output.F, dim=1)
+            classification_output.F = scatter_mean(classification_output.F, instance_labels, dim=0).index_select(0, instance_labels)
+
+        return semantic_output, classification_output, centroid_scores, offset_output, centroid_confidences, instance_output
 
     def load_weights(self, ckpt: dict | str | Path, key: str = 'model_state_dict') -> None:
         if isinstance(ckpt, str) or isinstance(ckpt, Path):

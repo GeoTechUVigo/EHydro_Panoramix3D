@@ -4,10 +4,10 @@ from typing import List, Tuple
 from . import StrictModel, _load_yaml_with_includes
 
 
-class SpecieClassConfig(StrictModel):
-    name: str = Field(..., description="Name of the specie class.")
-    id: int = Field(..., ge=0, description="ID of the specie class (must be non-negative).")
-    color: List[int] = Field(..., description="RGB color of the specie class.")
+class InstanceClassConfig(StrictModel):
+    name: str = Field(..., description="Name of the instance class.")
+    id: int = Field(..., ge=0, description="ID of the instance class (must be non-negative).")
+    color: List[int] = Field(..., description="RGB color of the instance class.")
 
     @field_validator('color')
     @classmethod
@@ -80,7 +80,7 @@ class DatasetConfig(StrictModel):
     min_tree_voxels: int = Field(125, ge=1, description="Minimum number of voxels for a tree instance (int >= 1).")
     feat_keys: List[str] = Field(['intensity'], description="List of feature keys.")
     semantic_classes: List[SemanticClassConfig] = Field(..., min_length=2, description="List of semantic classes (Min 2).")
-    specie_classes: List[SpecieClassConfig] = Field(..., min_length=2, description="List of specie classes.")
+    instance_classes: List[InstanceClassConfig] = Field(..., min_length=2, description="List of instance classes.")
     splits: SplitsConfig = Field(..., description="Dataset splits configuration.")
 
     @field_validator("semantic_classes")
@@ -94,15 +94,15 @@ class DatasetConfig(StrictModel):
             raise ValueError("Nombres de semantic_classes deben ser únicos.")
         return v
     
-    @field_validator("specie_classes")
+    @field_validator("instance_classes")
     @classmethod
-    def _specie_classes_unique(cls, v: List[SpecieClassConfig]) -> List[SpecieClassConfig]:
+    def _instance_classes_unique(cls, v: List[InstanceClassConfig]) -> List[InstanceClassConfig]:
         ids = [c.id for c in v]
         names = [c.name for c in v]
         if len(ids) != len(set(ids)):
-            raise ValueError("IDs de specie_classes deben ser únicos.")
+            raise ValueError("IDs de instance_classes deben ser únicos.")
         if len(names) != len(set(names)):
-            raise ValueError("Nombres de specie_classes deben ser únicos.")
+            raise ValueError("Nombres de instance_classes deben ser únicos.")
         return v
 
     @model_validator(mode="after")

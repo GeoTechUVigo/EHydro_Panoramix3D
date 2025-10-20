@@ -7,11 +7,11 @@ from . import StrictModel, _load_yaml_with_includes
 class TrainScheduleConfig(StrictModel):
     epochs: int = Field(..., ge=0, description="Number of epochs to train for (int >= 0).")
     lr_scale: float = Field(..., gt=0, description="Learning rate scale factor (float > 0).")
-    freeze_modules: list[Literal['backbone', 'semantic', 'offset', 'centroid', 'instance']] = Field(..., description="List of modules to freeze (list of strings).")
+    freeze_modules: list[Literal['backbone', 'semantic', 'classification', 'offset', 'centroid', 'instance']] = Field(..., description="List of modules to freeze (list of strings).")
 
     @field_validator('freeze_modules')
     @classmethod
-    def _no_dupes_or_all(cls, v: list[Literal['backbone', 'semantic', 'offset', 'centroid', 'instance']]):
+    def _no_dupes_or_all(cls, v: list[Literal['backbone', 'semantic', 'classification', 'offset', 'centroid', 'instance']]):
         if len(v) != len(set(v)):
             raise ValueError('freeze_modules must not contain duplicate entries.')
         if len(v) >= 5:
@@ -21,7 +21,7 @@ class TrainScheduleConfig(StrictModel):
 
 class LossCoeffsConfig(StrictModel):
     semantic_loss_coeff: float = Field(2.0, gt=0, description="Semantic segmentation loss coefficient (float > 0).")
-    specie_loss_coeff: float = Field(2.0, gt=0, description="Specie classification loss coefficient (float > 0).")
+    classification_loss_coeff: float = Field(2.0, gt=0, description="Classification loss coefficient (float > 0).")
     centroid_loss_coeff: float = Field(1.0, gt=0, description="Centroid detection loss coefficient (float > 0).")
     offset_loss_coeff: float = Field(1.0, gt=0, description="Offset prediction loss coefficient (float > 0).")
     offset_smooth_l1_beta_loss_coef: float = Field(5.0, gt=0, description="Offset Smooth L1 loss beta coefficient (float > 0).")
@@ -35,6 +35,7 @@ class LossCoeffsConfig(StrictModel):
 class LearningRatesConfig(StrictModel):
     backbone: float = Field(2e-3, gt=0, description="Backbone learning rate (float > 0).")
     semantic: float = Field(1e-3, gt=0, description="Semantic head learning rate (float > 0).")
+    classification: float = Field(1e-3, gt=0, description="Classification head learning rate (float > 0).")
     offset: float = Field(2e-2, gt=0, description="Offset head learning rate (float > 0).")
     centroid: float = Field(1e-3, gt=0, description="Centroid head learning rate (float > 0).")
     instance: float = Field(2e-2, gt=0, description="Instance head learning rate (float > 0).")

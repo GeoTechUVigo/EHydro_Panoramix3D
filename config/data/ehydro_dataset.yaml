@@ -21,7 +21,7 @@ semantic_classes:
   - name: tree
     id: 2
     color: [0, 54, 9]
-specie_classes:
+instance_classes:
   - name: class_1
     id: 1
     color: [0, 255, 0]
