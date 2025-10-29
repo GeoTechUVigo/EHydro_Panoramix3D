@@ -10,7 +10,7 @@ backbone:
   in_channels: 1
 semantic_head:
   num_classes: 3
-foreground_classes: [2]
+foreground_classes: [1, 2]
 classification_head:
   num_classes: 2
 centroid_head:

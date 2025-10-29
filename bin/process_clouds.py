@@ -19,7 +19,7 @@ class CloudProcessor:
         self._input_folder = Path('/workspace/input')
         self._output_folder = Path('/workspace/output')
 
-        self._chunk_size = 100
+        self._chunk_size = 75
         self._min_chunk_size = 15
         self._min_points_per_pc = 2000
         self._voxel_size = 0.3
@@ -81,10 +81,11 @@ class CloudProcessor:
                     voxels -= min_coords
 
                     intensity = np.array(chunk.intensity)[:, None]
-                    red = np.array(chunk.red)[:, None]
-                    green = np.array(chunk.green)[:, None]
-                    blue = np.array(chunk.blue)[:, None]
-                    feats = np.hstack((intensity, red, green, blue))
+                    #red = np.array(chunk.red)[:, None]
+                    #green = np.array(chunk.green)[:, None]
+                    #blue = np.array(chunk.blue)[:, None]
+                    #feats = np.hstack((intensity, red, green, blue))
+                    feats = (intensity - intensity.min()) / (intensity.max() - intensity.min())
 
                     voxels, indices, inverse_map = sparse_quantize(voxels, self._voxel_size, return_index=True, return_inverse=True)
                     feats = feats[indices]
