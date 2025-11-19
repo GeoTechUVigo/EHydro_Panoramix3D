@@ -400,21 +400,29 @@ class Panoramix3DTrainer:
 
         return {
             'semantic_iou': semantic_iou.cpu().numpy(),
-            'mean_semantic_iou': semantic_iou.mean(dim=0).item(),
+            # 'mean_semantic_iou': semantic_iou.mean(dim=0).item(),
+            'mean_semantic_iou': torch.nanmean(semantic_iou.masked_fill(semantic_iou == 0, float('nan')), dim=0).item(),
             'semantic_precision': semantic_precision.cpu().numpy(),
-            'mean_semantic_precision': semantic_precision.mean(dim=0).item(),
+            # 'mean_semantic_precision': semantic_precision.mean(dim=0).item(),
+            'mean_semantic_precision': torch.nanmean(semantic_precision.masked_fill(semantic_precision == 0, float('nan')), dim=0).item(),
             'semantic_recall': semantic_recall.cpu().numpy(),
-            'mean_semantic_recall': semantic_recall.mean(dim=0).item(),
+            # 'mean_semantic_recall': semantic_recall.mean(dim=0).item(),
+            'mean_semantic_recall': torch.nanmean(semantic_recall.masked_fill(semantic_recall == 0, float('nan')), dim=0).item(),
             'semantic_f1': semantic_f1.cpu().numpy(),
-            'mean_semantic_f1': semantic_f1.mean(dim=0).item(),
+            # 'mean_semantic_f1': semantic_f1.mean(dim=0).item(),
+            'mean_semantic_f1': torch.nanmean(semantic_f1.masked_fill(semantic_f1 == 0, float('nan')), dim=0).item(),
             'classification_iou': classification_iou.cpu().numpy(),
-            'mean_classification_iou': classification_iou.mean(dim=0).item(),
+            # 'mean_classification_iou': classification_iou.mean(dim=0).item(),
+            'mean_classification_iou': torch.nanmean(classification_iou.masked_fill(classification_iou == 0, float('nan')), dim=0).item(),
             'classification_precision': classification_precision.cpu().numpy(),
-            'mean_classification_precision': classification_precision.mean(dim=0).item(),
+            # 'mean_classification_precision': classification_precision.mean(dim=0).item(),
+            'mean_classification_precision': torch.nanmean(classification_precision.masked_fill(classification_precision == 0, float('nan')), dim=0).item(),
             'classification_recall': classification_recall.cpu().numpy(),
-            'mean_classification_recall': classification_recall.mean(dim=0).item(),
+            # 'mean_classification_recall': classification_recall.mean(dim=0).item(),
+            'mean_classification_recall': torch.nanmean(classification_recall.masked_fill(classification_recall == 0, float('nan')), dim=0).item(),
             'classification_f1': classification_f1.cpu().numpy(),
-            'mean_classification_f1': classification_f1.mean(dim=0).item(),
+            # 'mean_classification_f1': classification_f1.mean(dim=0).item(),
+            'mean_classification_f1': torch.nanmean(classification_f1.masked_fill(classification_f1 == 0, float('nan')), dim=0).item(),
             'centroids_found': remap_info['num_predictions'],
             'centroids_gt': remap_info['num_instances'],
             'centroids_ratio': remap_info['num_predictions'] / remap_info['num_instances'] if remap_info['num_instances'] > 0 else float('nan'),
@@ -461,6 +469,10 @@ class Panoramix3DTrainer:
         instance_labels = feed_dict["instance_labels"].to(self._device)
         instance_labels.C = instance_labels.C[semantic_mask]
         instance_labels.F = instance_labels.F[semantic_mask] - 1
+
+        #print(f'min semantic label: {semantic_labels.F.min().item()}, max semantic label: {semantic_labels.F.max().item()}')
+        #print(f'min classification label: {classification_labels.F.min().item()}, max classification label: {classification_labels.F.max().item()}')
+        #print(f'min instance label: {instance_labels.F.min().item()}, max instance label: {instance_labels.F.max().item()}')
 
         if training:
             self._optimizer.zero_grad()
@@ -869,5 +881,6 @@ class Panoramix3DTrainer:
                 self._log_stats(result['loss'], result['stat'], epoch * len(data_loader) + pbar.n, prefix='Val')
                 self._log_pointclouds(epoch * len(data_loader) + pbar.n, result)
 
-        stats = {k: np.array(v).mean(axis=0) for k, v in stats.items()}
+        stats = {k: np.nanmean(np.where(np.array(v) != 0.0, np.array(v), np.nan), axis=0) for k, v in stats.items()}
+        # stats = {k: np.array(v).mean(axis=0) for k, v in stats.items()}
         self._log_mean_stats(epoch, stats)

@@ -15,12 +15,30 @@ semantic_classes:
   - name: ground
     id: 0
     color: [128, 128, 128]
-  - name: low_vegetation
+  - name: path
     id: 1
+    color: [92, 22, 22]
+  - name: road
+    id: 2
+    color: [82, 82, 82]
+  - name: water
+    id: 3
+    color: [12, 106, 194]
+  - name: low_vegetation
+    id: 4
     color: [77, 255, 106]
   - name: tree
-    id: 2
+    id: 5
     color: [0, 54, 9]
+  - name: building
+    id: 6
+    color: [76, 100, 120]
+  - name: object
+    id: 7
+    color: [171, 196, 43]
+  - name: electric_line
+    id: 8
+    color: [255, 255, 0]
 instance_classes:
   - name: class_1
     id: 1
@@ -31,7 +49,7 @@ instance_classes:
 splits:
   train:
     data_augmentation:
-      coef: 4
+      coef: 2
       yaw_range: [0.0, 360.0]
       tilt_range: [-5.0, 5.0]
       scale_range: [0.9, 1.3]

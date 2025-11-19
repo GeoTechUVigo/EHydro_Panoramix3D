@@ -1,5 +1,5 @@
 root: /home/samuel/Panoramix3D_data
-version_name: 'Panoramix3D_ehydro_V1'
+version_name: 'Panoramix3D_ehydro_V2'
 mode: 'train'
 batch_size: 16
 train_schedule:
@@ -31,7 +31,7 @@ loss_coeffs:
   instance_dice_loss_coeff: 1.0
 learning_rates:
   backbone: 2e-3
-  semantic: 1e-3
+  semantic: 2
   classification: 1e-3
   offset: 2e-2
   centroid: 1e-3
