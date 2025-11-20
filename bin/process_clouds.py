@@ -73,6 +73,7 @@ class CloudProcessor:
             header = deepcopy(chunks[0].header)
             header.add_extra_dim(laspy.ExtraBytesParams(name="semantic_pred", type=np.int32))
             header.add_extra_dim(laspy.ExtraBytesParams(name="classification_pred", type=np.int32))
+            header.add_extra_dim(laspy.ExtraBytesParams(name="centroid_pred", type=np.float32))
             header.add_extra_dim(laspy.ExtraBytesParams(name="instance_pred", type=np.int32))
             with laspy.open(self._output_folder / f'{point_cloud.stem}_segmented.las', mode='w', header=header) as file:
                 for i, chunk in enumerate(tqdm(chunks, desc=f"Processing {point_cloud.name}")):
@@ -110,7 +111,7 @@ class CloudProcessor:
                     if result is None:
                         continue
 
-                    semantic_output_raw, classification_output_raw, _, _, _, instance_output_raw = result
+                    semantic_output_raw, classification_output_raw, centroid_scores_raw, _, _, instance_output_raw = result
 
                     semantic_output = torch.argmax(semantic_output_raw.F.cpu(), dim=1).numpy()
                     fg_mask = np.isin(semantic_output, self._config.foreground_classes)
@@ -118,6 +119,8 @@ class CloudProcessor:
                     classification_output = np.zeros_like(semantic_output)
                     classification_output[fg_mask] = torch.argmax(classification_output_raw.F.cpu(), dim=1).numpy() + 1
 
+                    centroid_scores = np.zeros(len(semantic_output), dtype=np.float32)
+                    centroid_scores[fg_mask] = centroid_scores_raw.F.detach().cpu().numpy().squeeze()
                     instance_output_full = np.zeros_like(semantic_output)
 
                     if instance_output_raw.F.shape[1] > 0:
@@ -128,12 +131,14 @@ class CloudProcessor:
 
                     semantic_output = semantic_output[inverse_map]
                     classification_output = classification_output[inverse_map]
+                    centroid_scores = centroid_scores[inverse_map]
                     instance_output = instance_output_full[inverse_map]
 
                     out_file = laspy.LasData(header=chunk.header, points=chunk.points.copy())
-                    out_file.add_extra_dims([laspy.ExtraBytesParams(name="semantic_pred", type=np.int32), laspy.ExtraBytesParams(name="classification_pred", type=np.int32), laspy.ExtraBytesParams(name="instance_pred", type=np.int32)])
+                    out_file.add_extra_dims([laspy.ExtraBytesParams(name="semantic_pred", type=np.int32), laspy.ExtraBytesParams(name="classification_pred", type=np.int32), laspy.ExtraBytesParams(name="centroid_pred", type=np.float32), laspy.ExtraBytesParams(name="instance_pred", type=np.int32)])
                     out_file.semantic_pred = semantic_output
                     out_file.classification_pred = classification_output
+                    out_file.centroid_pred = centroid_scores
                     out_file.instance_pred = instance_output
 
                     file.write_points(out_file.points)
