@@ -99,8 +99,8 @@ class Panoramix3DTrainer:
         if self._cfg.trainer.start_epoch > 0:
             self._load_ckpt(self._checkpoint_folder / f'{self._cfg.trainer.version_name}_epoch_{self._cfg.trainer.start_epoch}.pth')
 
-        self._criterion_semantic = nn.CrossEntropyLoss()
-        self._criterion_classification = nn.CrossEntropyLoss()
+        self._criterion_semantic = nn.CrossEntropyLoss(weight=torch.tensor(self._cfg.trainer.class_weights.semantic).to(self._device))
+        self._criterion_classification = nn.CrossEntropyLoss(weight=torch.tensor(self._cfg.trainer.class_weights.classification).to(self._device))
         self._criterion_centroid = CenterNetFocalLoss()
         self._criterion_offset = nn.SmoothL1Loss(beta=self._cfg.trainer.loss_coeffs.offset_smooth_l1_beta_loss_coef)
         self._criterion_instance = HungarianInstanceLoss(
@@ -619,8 +619,8 @@ class Panoramix3DTrainer:
         offset_labels = np.zeros((voxels.shape[0], 3), dtype=float)
         offset_labels[semantic_mask] = result['offset_labels'].F.cpu().numpy()
 
-        instance_output = np.zeros(voxels.shape[0], dtype=int)
-        instance_output[semantic_mask] = torch.argmax(result['instance_output'].F.cpu(), dim=1).numpy() + 1
+        instance_output = np.full(voxels.shape[0], fill_value=-1, dtype=int)
+        instance_output[semantic_mask] = torch.argmax(result['instance_output'].F.cpu(), dim=1).numpy()
 
         gt_indices = result['loss']['remap_info']['gt_indices'].cpu().numpy()
         pred_indices = result['loss']['remap_info']['pred_indices'].cpu().numpy()

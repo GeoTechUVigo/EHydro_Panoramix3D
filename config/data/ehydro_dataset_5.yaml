@@ -15,12 +15,21 @@ semantic_classes:
   - name: ground
     id: 0
     color: [128, 128, 128]
-  - name: low_vegetation
+  - name: path
     id: 1
+    color: [92, 22, 22]
+  - name: water
+    id: 2
+    color: [12, 106, 194]
+  - name: low_vegetation
+    id: 3
     color: [77, 255, 106]
   - name: tree
-    id: 2
+    id: 4
     color: [0, 54, 9]
+  - name: building
+    id: 5
+    color: [76, 100, 120]
 instance_classes:
   - name: class_1
     id: 1

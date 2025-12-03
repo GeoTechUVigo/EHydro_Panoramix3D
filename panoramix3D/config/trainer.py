@@ -41,6 +41,11 @@ class LearningRatesConfig(StrictModel):
     instance: float = Field(2e-2, gt=0, description="Instance head learning rate (float > 0).")
 
 
+class ClassWeightsConfig(StrictModel):
+    semantic: list[float] = Field(..., description="Class weights for semantic segmentation loss (list of floats).")
+    classification: list[float] = Field(..., description="Class weights for classification loss (list of floats).")
+
+
 class TrainerConfig(StrictModel):
     root: str = Field(..., description="Root directory for training outputs and checkpoints.")
     version_name: str = Field(..., description="Version name for the training run.")
@@ -52,6 +57,7 @@ class TrainerConfig(StrictModel):
     weight_decay: float = Field(0.04, ge=0, description="Weight decay for optimization (float >= 0).")
     loss_coeffs: LossCoeffsConfig = Field(default_factory=LossCoeffsConfig, description="Loss function coefficients configuration.")
     learning_rates: LearningRatesConfig = Field(default_factory=LearningRatesConfig, description="Learning rates for different model components.")
+    class_weights: ClassWeightsConfig = Field(..., description="Class weights for loss functions.")
 
     @classmethod
     def from_yaml(cls, path: str) -> "TrainerConfig":

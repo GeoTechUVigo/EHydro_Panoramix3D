@@ -340,6 +340,10 @@ class Panoramix3DDataset(Dataset):
         semantic_labels = semantic_labels[size_mask]
         instance_labels = instance_labels[size_mask]
         classification_labels = classification_labels[size_mask]
+
+        # semantic_labels[np.isin(semantic_labels, [1, 2, 5])] = 0
+        # semantic_labels[semantic_labels == 3] = 1
+        # semantic_labels[semantic_labels == 4] = 2
         
         _, instance_labels = np.unique(instance_labels, return_inverse=True)
 
