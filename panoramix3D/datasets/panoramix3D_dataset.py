@@ -334,18 +334,20 @@ class Panoramix3DDataset(Dataset):
         classification_labels = classification_labels[indices]
 
         sizes = np.bincount(instance_labels)[instance_labels]
-        size_mask = (sizes >= self._cfg.min_tree_voxels) # & ((instance_labels != 0) | (semantic_labels == 0)) 
-        voxels = voxels[size_mask]
-        feat = feat[size_mask]
-        semantic_labels = semantic_labels[size_mask]
-        instance_labels = instance_labels[size_mask]
-        classification_labels = classification_labels[size_mask]
+        size_mask = (sizes >= self._cfg.min_tree_voxels) # & ((instance_labels != 0) | (semantic_labels == 0))
+        consistent_mask = (semantic_labels != 4) | (instance_labels > 0)
+        mask = size_mask & consistent_mask
+        voxels = voxels[mask]
+        feat = feat[mask]
+        semantic_labels = semantic_labels[mask]
+        instance_labels = instance_labels[mask]
+        classification_labels = classification_labels[mask]
 
-        # semantic_labels[np.isin(semantic_labels, [1, 2, 5])] = 0
-        # semantic_labels[semantic_labels == 3] = 1
-        # semantic_labels[semantic_labels == 4] = 2
-        
-        _, instance_labels = np.unique(instance_labels, return_inverse=True)
+        _, inv = np.unique(instance_labels[instance_labels != 0], return_inverse=True)
+        instance_labels[instance_labels != 0] = inv + 1
+
+        if ((semantic_labels == 4) & (instance_labels <= 0)).any():
+            print(f"Warning: Inconsistent instance labels in file {current_file}!")
 
         centroid_score_labels = self._get_centroid_scores(voxels, instance_labels)
         offset_labels = self._get_instance_offsets(voxels, instance_labels)

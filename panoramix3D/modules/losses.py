@@ -105,6 +105,29 @@ class CenterNetFocalLoss(nn.Module):
         return loss
     
 
+class OffsetLoss(nn.Module):
+    def __init__(self):
+        super(OffsetLoss, self).__init__()
+
+    def forward(self, pred_offsets, gt_offsets, total_instance_points):
+        """Computes the L1 norm between prediction and ground truth and
+        also computes cosine similarity between both vectors.
+        see https://arxiv.org/pdf/2004.01658.pdf equations 2 and 3
+        """
+        pt_diff = pred_offsets - gt_offsets
+        pt_dist = torch.sum(torch.abs(pt_diff), dim=-1)
+        offset_norm_loss = torch.sum(pt_dist) / (total_instance_points + 1e-6)
+
+        gt_offsets_norm = torch.norm(gt_offsets, p=2, dim=1)  # (N), float
+        gt_offsets_ = gt_offsets / (gt_offsets_norm.unsqueeze(-1) + 1e-8)
+        pred_offsets_norm = torch.norm(pred_offsets, p=2, dim=1)
+        pred_offsets_ = pred_offsets / (pred_offsets_norm.unsqueeze(-1) + 1e-8)
+        direction_diff = 1 - (gt_offsets_ * pred_offsets_).sum(-1)  # (N) // Modified to avoid negative values
+        offset_dir_loss = torch.sum(direction_diff) / (total_instance_points + 1e-6)
+
+        return offset_norm_loss, offset_dir_loss
+    
+
 class HungarianInstanceLoss(nn.Module):
     """
     This class computes a per-batch assignment-aware instance loss by combining

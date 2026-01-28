@@ -24,7 +24,7 @@ semantic_classes:
   - name: water
     id: 3
     color: [12, 106, 194]
-  - name: low_vegetation
+  - name: shrub
     id: 4
     color: [77, 255, 106]
   - name: tree
@@ -33,10 +33,10 @@ semantic_classes:
   - name: building
     id: 6
     color: [76, 100, 120]
-  - name: object
+  - name: misc
     id: 7
     color: [171, 196, 43]
-  - name: electric_line
+  - name: power_line
     id: 8
     color: [255, 255, 0]
 instance_classes:

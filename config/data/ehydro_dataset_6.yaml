@@ -21,13 +21,13 @@ semantic_classes:
   - name: water
     id: 2
     color: [12, 106, 194]
-  - name: low_vegetation
+  - name: shrub
     id: 3
     color: [77, 255, 106]
   - name: tree
     id: 4
     color: [0, 54, 9]
-  - name: building
+  - name: misc
     id: 5
     color: [76, 100, 120]
 instance_classes:
@@ -40,7 +40,7 @@ instance_classes:
 splits:
   train:
     data_augmentation:
-      coef: 2
+      coef: 1
       yaw_range: [0.0, 360.0]
       tilt_range: [-5.0, 5.0]
       scale_range: [0.9, 1.3]

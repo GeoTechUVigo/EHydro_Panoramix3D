@@ -8,15 +8,13 @@ import torchsparse
 import numpy as np
 
 from typing import Dict
-from collections import deque
-
-from open3d.visualization.tensorboard_plugin import summary
 from open3d.visualization.tensorboard_plugin.util import to_dict_batch
 
 from torch import nn, Tensor
 from torch.cuda import amp
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from torchmetrics import ConfusionMatrix
 from torchmetrics.classification import MulticlassJaccardIndex, BinaryJaccardIndex, Precision, Recall, F1Score
 
 from torchsparse import SparseTensor
@@ -28,7 +26,7 @@ from .utils import sparse_unique_id_collate_fn
 
 from ..datasets import Panoramix3DDataset
 from ..models import Panoramix3D
-from ..modules import CenterNetFocalLoss, HungarianInstanceLoss
+from ..modules import CenterNetFocalLoss, HungarianInstanceLoss, OffsetLoss
 
 from ..config import AppConfig
 
@@ -87,22 +85,46 @@ class Panoramix3DTrainer:
 
         self._model = Panoramix3D.from_config(self._cfg.model).to(device=self._device)
         self._optimizer = torch.optim.AdamW([
-            {'params': self._model.encoder.parameters(), 'lr': self._cfg.trainer.learning_rates.backbone},
-            {'params': self._model.semantic_head.parameters(), 'lr': self._cfg.trainer.learning_rates.semantic},
-            {'params': self._model.classification_head.parameters(), 'lr': self._cfg.trainer.learning_rates.classification},
-            {'params': self._model.offset_head.parameters(), 'lr': self._cfg.trainer.learning_rates.offset},
-            {'params': self._model.centroid_head.parameters(), 'lr': self._cfg.trainer.learning_rates.centroid},
-            {'params': self._model.instance_head.parameters(), 'lr': self._cfg.trainer.learning_rates.instance}
-        ], weight_decay=self._cfg.trainer.weight_decay)
+            {'params': self._model.encoder.parameters(), 'lr': self._cfg.trainer.learning_rates.backbone, 'weight_decay': self._cfg.trainer.weight_decays.backbone},
+            {'params': self._model.semantic_head.parameters(), 'lr': self._cfg.trainer.learning_rates.semantic, 'weight_decay': self._cfg.trainer.weight_decays.semantic},
+            {'params': self._model.classification_head.parameters(), 'lr': self._cfg.trainer.learning_rates.classification, 'weight_decay': self._cfg.trainer.weight_decays.classification},
+            {'params': self._model.offset_head.parameters(), 'lr': self._cfg.trainer.learning_rates.offset, 'weight_decay': self._cfg.trainer.weight_decays.offset},
+            {'params': self._model.centroid_head.parameters(), 'lr': self._cfg.trainer.learning_rates.centroid, 'weight_decay': self._cfg.trainer.weight_decays.centroid},
+            {'params': self._model.instance_head.parameters(), 'lr': self._cfg.trainer.learning_rates.instance, 'weight_decay': self._cfg.trainer.weight_decays.instance}
+        ])
         self._scaler = amp.GradScaler(enabled=True)
+        if self._cfg.trainer.lr_scheduler.type == 'ExponentialLR':
+            self._lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                self._optimizer,
+                gamma=self._cfg.trainer.lr_scheduler.params.gamma
+            )
+        else:
+            raise ValueError(f"Unsupported LR scheduler type: {self._cfg.trainer.lr_scheduler.type}")
 
         if self._cfg.trainer.start_epoch > 0:
             self._load_ckpt(self._checkpoint_folder / f'{self._cfg.trainer.version_name}_epoch_{self._cfg.trainer.start_epoch}.pth')
 
-        self._criterion_semantic = nn.CrossEntropyLoss(weight=torch.tensor(self._cfg.trainer.class_weights.semantic).to(self._device))
-        self._criterion_classification = nn.CrossEntropyLoss(weight=torch.tensor(self._cfg.trainer.class_weights.classification).to(self._device))
+        semantic_class_counts, classification_class_counts = self._get_class_counts()
+        semantic_weights = self._compute_weights(semantic_class_counts)
+        classification_weights = self._compute_weights(classification_class_counts)
+
+        print(f'Distribución de: semantic_labels:')
+        total_points = semantic_class_counts.sum()
+        for cls in self._cfg.dataset.semantic_classes:
+            print(f'\t* {cls.name} ({cls.id}): {semantic_class_counts[cls.id]:.0f} puntos ({(semantic_class_counts[cls.id] / total_points * 100):.2f} %), weight: {semantic_weights[cls.id]:.4f}.')
+        
+        print(f'Distribución de: classification_labels:')
+        total_points = classification_class_counts.sum()
+        for cls in self._cfg.dataset.instance_classes:
+            if cls.id == 0:
+                continue
+
+            print(f'\t* {cls.name} ({cls.id}): {classification_class_counts[cls.id - 1]:.0f} puntos ({(classification_class_counts[cls.id - 1] / total_points * 100):.2f} %), weight: {classification_weights[cls.id - 1]:.4f}.')
+
+        self._criterion_semantic = nn.CrossEntropyLoss(weight=semantic_weights)
+        self._criterion_classification = nn.CrossEntropyLoss(weight=classification_weights)
         self._criterion_centroid = CenterNetFocalLoss()
-        self._criterion_offset = nn.SmoothL1Loss(beta=self._cfg.trainer.loss_coeffs.offset_smooth_l1_beta_loss_coef)
+        self._criterion_offset = OffsetLoss()
         self._criterion_instance = HungarianInstanceLoss(
             lambda_matched=self._cfg.trainer.loss_coeffs.instance_matched_loss_coeff,
             lambda_unmatched=self._cfg.trainer.loss_coeffs.instance_unmatched_loss_coeff,
@@ -114,6 +136,10 @@ class Panoramix3DTrainer:
         self._metric_semantic_precision = Precision(task='multiclass', num_classes=self._cfg.model.semantic_head.num_classes, average='none').to(device=self._device)
         self._metric_semantic_recall = Recall(task='multiclass', num_classes=self._cfg.model.semantic_head.num_classes, average='none').to(device=self._device)
         self._metric_semantic_f1 = F1Score(task='multiclass', num_classes=self._cfg.model.semantic_head.num_classes, average='none').to(device=self._device)
+        self._metric_semantic_confmat = ConfusionMatrix(
+            task='multiclass', 
+            num_classes=self._cfg.model.semantic_head.num_classes
+        ).to(device=self._device)
 
         self._metric_classification_iou = MulticlassJaccardIndex(num_classes=self._cfg.model.classification_head.num_classes, average='none').to(device=self._device)
         self._metric_classification_precision = Precision(task='multiclass', num_classes=self._cfg.model.classification_head.num_classes, average='none').to(device=self._device)
@@ -145,6 +171,44 @@ class Panoramix3DTrainer:
         print(f'\nMinimum scene size: ({scales_m[0]:.1f}, {scales_m[1]:.1f}, {scales_m[2]:.1f}) meters')
 
         self._writer = SummaryWriter(log_dir=self._logs_folder, flush_secs=30)
+
+    def _get_class_counts(self) -> Tensor:
+        """
+        Compute class counts for semantic segmentation and instance classification labels in the training dataset.
+        
+        Returns:
+            Tensor of class counts for each semantic and classification class
+        """
+
+        dataset = Panoramix3DDataset(self._cfg.dataset, split='train')
+        semantic_counts = torch.zeros(self._cfg.model.semantic_head.num_classes, dtype=torch.float32, device=self._device)
+        classification_counts = torch.zeros(self._cfg.model.classification_head.num_classes, dtype=torch.float32, device=self._device)
+
+        for result in dataset:
+            for cls in range(self._cfg.model.semantic_head.num_classes):
+                semantic_counts[cls] += (result['semantic_labels'].F == cls).sum()
+            for cls in range(self._cfg.model.classification_head.num_classes):
+                classification_counts[cls] += (result['classification_labels'].F == (cls + 1)).sum()
+                
+        return semantic_counts, classification_counts
+
+    def _compute_weights(self, class_counts) -> Tensor:
+        """
+        Compute class weights inversely proportional to class frequencies for handling class imbalance.
+
+        Args:
+            class_counts: 'semantic_labels' or 'classification_labels' to compute weights for respective classes
+        Returns:
+            Tensor of class weights
+        """
+
+        weights = class_counts.mean() / class_counts
+        if self._cfg.trainer.class_weights == 'sqrt':
+            weights = torch.sqrt(weights).to(self._device)
+        elif self._cfg.trainer.class_weights == 'log':
+            weights = torch.log(1.1 + weights / weights.sum()).to(self._device)
+
+        return weights / weights.sum()
 
     def _load_ckpt(self, ckpt_path: Path) -> int:
         """
@@ -224,20 +288,25 @@ class Panoramix3DTrainer:
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F) * self._cfg.trainer.loss_coeffs.semantic_loss_coeff
         loss_classification = self._criterion_classification(classification_output.F, classification_labels.F) * self._cfg.trainer.loss_coeffs.classification_loss_coeff
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F) * self._cfg.trainer.loss_coeffs.centroid_loss_coeff
-        loss_offset = self._criterion_offset(offset_output.F, offset_labels.F) * self._cfg.trainer.loss_coeffs.offset_loss_coeff
+        loss_offset_norm, loss_offset_dir = self._criterion_offset(offset_output.F, offset_labels.F)
         loss_inst, remap_info = self._criterion_instance(instance_output,
                                                          instance_labels,
                                                          centroid_batches=centroid_confidences.C[:, 0])
 
+        loss_offset_norm *= self._cfg.trainer.loss_coeffs.offset_norm_loss_coeff
+        loss_offset_dir *= self._cfg.trainer.loss_coeffs.offset_dir_loss_coeff
+        total_loss_offset = loss_offset_norm + loss_offset_dir
         total_loss_inst = loss_inst['total_loss'] * self._cfg.trainer.loss_coeffs.instance_loss_coeff
-        total_loss = loss_sem + loss_classification + loss_centroid + loss_offset + total_loss_inst
+        total_loss = loss_sem + loss_classification + loss_centroid + total_loss_offset + total_loss_inst
 
         return {
             'total_loss': total_loss,
             'semantic_loss': loss_sem,
             'classification_loss': loss_classification,
             'centroid_loss': loss_centroid,
-            'offset_loss': loss_offset,
+            'offset_loss': total_loss_offset,
+            'offset_norm_loss': loss_offset_norm,
+            'offset_dir_loss': loss_offset_dir,
             'instance_loss': total_loss_inst,
             'matched_loss': loss_inst['matched_loss'],
             'unmatched_loss': loss_inst['unmatched_loss'],
@@ -275,7 +344,7 @@ class Panoramix3DTrainer:
             semantic_labels: Ground truth semantic class labels
             
         Returns:
-            Tuple of (IoU, precision, recall, F1) tensors for each class
+            Tuple of (IoU, precision, recall, F1) tensors for each class and the confusion matrix
         """
         semantic_iou = self._metric_semantic_iou(semantic_output.F, semantic_labels.F)
 
@@ -283,7 +352,9 @@ class Panoramix3DTrainer:
         semantic_recall = self._metric_semantic_recall(semantic_output.F, semantic_labels.F)
         semantic_f1 = self._metric_semantic_f1(semantic_output.F, semantic_labels.F)
 
-        return semantic_iou, semantic_precision, semantic_recall, semantic_f1
+        confmat = self._metric_semantic_confmat(semantic_output.F, semantic_labels.F)
+
+        return semantic_iou, semantic_precision, semantic_recall, semantic_f1, confmat
     
     @torch.no_grad()
     def _compute_classification_metrics(
@@ -332,10 +403,10 @@ class Panoramix3DTrainer:
             iou_thresh: IoU threshold for considering a detection as positive
             
         Returns:
-            Tuple of (TP, FP, FN, precision, recall, F1) metrics
+            Tuple of (TP, FP, FN, iou.mean(), precision, recall, F1) metrics
         """
         if remap_info['num_instances'] == 0:
-            return 0, 0, 0, float('nan'), float('nan'), float('nan')
+            return 0, 0, 0, float('nan'), float('nan'), float('nan'), float('nan')
         
         instance_output_remap = torch.zeros((instance_output.F.size(0), remap_info['num_instances']), device=instance_output.F.device, dtype=instance_output.F.dtype)
         instance_output_remap[:, remap_info['gt_indices']] = instance_output.F[:, remap_info['pred_indices']]
@@ -389,7 +460,7 @@ class Panoramix3DTrainer:
             Dictionary containing all computed metrics for logging and monitoring
         """
 
-        semantic_iou, semantic_precision, semantic_recall, semantic_f1 = self._compute_semantic_metrics(semantic_output, semantic_labels)
+        semantic_iou, semantic_precision, semantic_recall, semantic_f1, confmat = self._compute_semantic_metrics(semantic_output, semantic_labels)
         classification_iou, classification_precision, classification_recall, classification_f1 = self._compute_classification_metrics(classification_output, classification_labels)
         instance_tp, instance_fp, instance_fn, iou, instance_precision, instance_recall, instance_f1 = self._compute_instance_metrics(
             instance_output,
@@ -411,6 +482,7 @@ class Panoramix3DTrainer:
             'semantic_f1': semantic_f1.cpu().numpy(),
             # 'mean_semantic_f1': semantic_f1.mean(dim=0).item(),
             'mean_semantic_f1': torch.nanmean(semantic_f1.masked_fill(semantic_f1 == 0, float('nan')), dim=0).item(),
+            'semantic_confusion_matrix': confmat.cpu().numpy(),
             'classification_iou': classification_iou.cpu().numpy(),
             # 'mean_classification_iou': classification_iou.mean(dim=0).item(),
             'mean_classification_iou': torch.nanmean(classification_iou.masked_fill(classification_iou == 0, float('nan')), dim=0).item(),
@@ -538,11 +610,13 @@ class Panoramix3DTrainer:
         self._writer.add_scalar(f'{prefix}_Loss/3/Classification_loss', loss['classification_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Loss/4/Centroid_loss', loss['centroid_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Loss/5/Offset_loss', loss['offset_loss'].item(), step)
-        self._writer.add_scalar(f'{prefix}_Loss/6/Instance_loss', loss['instance_loss'].item(), step)
-        self._writer.add_scalar(f'{prefix}_Loss/7/Matched_loss', loss['matched_loss'].item(), step)
-        self._writer.add_scalar(f'{prefix}_Loss/8/Unmatched_loss', loss['unmatched_loss'].item(), step)
-        self._writer.add_scalar(f'{prefix}_Loss/9/Bce_loss', loss['bce_loss'].item(), step)
-        self._writer.add_scalar(f'{prefix}_Loss/10/Dice_loss', loss['dice_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/6/Offset_norm_loss', loss['offset_norm_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/7/Offset_dir_loss', loss['offset_dir_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/8/Instance_loss', loss['instance_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/9/Matched_loss', loss['matched_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/10/Unmatched_loss', loss['unmatched_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/11/Bce_loss', loss['bce_loss'].item(), step)
+        self._writer.add_scalar(f'{prefix}_Loss/12/Dice_loss', loss['dice_loss'].item(), step)
         self._writer.add_scalar(f'{prefix}_Semantic/1/Mean_semantic_IoU', stat['mean_semantic_iou'], step)
         self._writer.add_scalar(f'{prefix}_Semantic/2/Mean_semantic_Precision', stat['mean_semantic_precision'], step)
         self._writer.add_scalar(f'{prefix}_Semantic/3/Mean_semantic_Recall', stat['mean_semantic_recall'], step)
@@ -563,6 +637,12 @@ class Panoramix3DTrainer:
         self._writer.add_scalar(f'{prefix}_Learning_Rate/4/Offset_LR', self._optimizer.param_groups[3]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/5/Centroid_LR', self._optimizer.param_groups[4]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/6/Instance_LR', self._optimizer.param_groups[5]['lr'], step)
+
+        confmat = torch.from_numpy(stat['semantic_confusion_matrix']).float()
+        confmat_normalized = confmat / (confmat.sum(dim=1, keepdim=True) + 1e-10)
+
+        confmat_img = confmat_normalized.unsqueeze(0)
+        self._writer.add_image(f'{prefix}_Semantic/Confusion_Matrix', confmat_img, step, dataformats='CHW')
 
     @torch.no_grad()
     def _log_mean_stats(self, step: int, stats: dict) -> None:
@@ -620,7 +700,8 @@ class Panoramix3DTrainer:
         offset_labels[semantic_mask] = result['offset_labels'].F.cpu().numpy()
 
         instance_output = np.full(voxels.shape[0], fill_value=-1, dtype=int)
-        instance_output[semantic_mask] = torch.argmax(result['instance_output'].F.cpu(), dim=1).numpy()
+        if result['instance_output'].F.size(1) > 0:
+            instance_output[semantic_mask] = torch.argmax(result['instance_output'].F.cpu(), dim=1).numpy()
 
         gt_indices = result['loss']['remap_info']['gt_indices'].cpu().numpy()
         pred_indices = result['loss']['remap_info']['pred_indices'].cpu().numpy()
@@ -751,28 +832,9 @@ class Panoramix3DTrainer:
             pin_memory=True
         )
 
-        train_schedule = []
-        for stage in self._cfg.trainer.train_schedule:
-            train_schedule.extend([stage] * stage.epochs)
-
-        epochs = len(train_schedule)
-        epoch_iter = range(self._cfg.trainer.start_epoch, epochs)
-        for epoch in epoch_iter:
+        for epoch in range(self._cfg.trainer.start_epoch, self._cfg.trainer.num_epochs):
             self._model.train()
-            lr_scale = train_schedule[epoch].lr_scale
-            freeze_modules = train_schedule[epoch].freeze_modules
-
-            print(f'Version name: {self._cfg.trainer.version_name}')
-            print(f'\n=== Starting epoch {epoch + 1} / {epochs} ===')
-            print(f' * LR scale: {lr_scale}')
-            print(f' * Freeze modules: {freeze_modules}')
-
-            self._optimizer.param_groups[0]['lr'] = self._cfg.trainer.learning_rates.backbone * lr_scale
-            self._optimizer.param_groups[1]['lr'] = self._cfg.trainer.learning_rates.semantic * lr_scale
-            self._optimizer.param_groups[2]['lr'] = self._cfg.trainer.learning_rates.classification * lr_scale
-            self._optimizer.param_groups[3]['lr'] = self._cfg.trainer.learning_rates.offset * lr_scale
-            self._optimizer.param_groups[4]['lr'] = self._cfg.trainer.learning_rates.centroid * lr_scale
-            self._optimizer.param_groups[5]['lr'] = self._cfg.trainer.learning_rates.instance * lr_scale
+            freeze_modules = [item.module for item in self._cfg.trainer.freeze_modules if item.epochs > epoch]
 
             self._freeze_params(self._model.encoder, 'backbone' in freeze_modules)
             self._freeze_params(self._model.semantic_head, 'semantic' in freeze_modules)
@@ -780,6 +842,9 @@ class Panoramix3DTrainer:
             self._freeze_params(self._model.offset_head, 'offset' in freeze_modules)
             self._freeze_params(self._model.centroid_head, 'centroid' in freeze_modules)
             self._freeze_params(self._model.instance_head, 'instance' in freeze_modules)
+
+            print(f'\n=== Starting epoch {epoch + 1} / {self._cfg.trainer.num_epochs} ===')
+            print(f' * Freeze modules: {freeze_modules}')
 
             pbar = tqdm(data_loader, desc='[Train]', file=sys.stdout, dynamic_ncols=True)
             for feed_dict in pbar:
@@ -803,7 +868,8 @@ class Panoramix3DTrainer:
                 self._scaler.update()
 
             self._save_ckpt(epoch + 1)
-            print(f"\n✅ Epoch {epoch + 1} / {epochs} finished.")
+            self._lr_scheduler.step()
+            print(f"\n✅ Epoch {epoch + 1} / {self._cfg.trainer.num_epochs} finished.")
 
             self.eval(epoch)
 
