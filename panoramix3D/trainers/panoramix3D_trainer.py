@@ -27,6 +27,7 @@ from .utils import sparse_unique_id_collate_fn
 from ..datasets import Panoramix3DDataset
 from ..models import Panoramix3D
 from ..modules import CenterNetFocalLoss, HungarianInstanceLoss, OffsetLoss
+from ..schedulers import build_lr_scheduler, build_bn_scheduler
 
 from ..config import AppConfig
 
@@ -93,13 +94,9 @@ class Panoramix3DTrainer:
             {'params': self._model.instance_head.parameters(), 'lr': self._cfg.trainer.learning_rates.instance, 'weight_decay': self._cfg.trainer.weight_decays.instance}
         ])
         self._scaler = amp.GradScaler(enabled=True)
-        if self._cfg.trainer.lr_scheduler.type == 'ExponentialLR':
-            self._lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                self._optimizer,
-                gamma=self._cfg.trainer.lr_scheduler.params.gamma
-            )
-        else:
-            raise ValueError(f"Unsupported LR scheduler type: {self._cfg.trainer.lr_scheduler.type}")
+
+        self._lr_scheduler = build_lr_scheduler(self._cfg.trainer.lr_scheduler, self._optimizer)
+        self._bn_scheduler = build_bn_scheduler(self._cfg.trainer.bn_scheduler, self._model, self._cfg.trainer.start_epoch)
 
         if self._cfg.trainer.start_epoch > 0:
             self._load_ckpt(self._checkpoint_folder / f'{self._cfg.trainer.version_name}_epoch_{self._cfg.trainer.start_epoch}.pth')
@@ -108,18 +105,18 @@ class Panoramix3DTrainer:
         semantic_weights = self._compute_weights(semantic_class_counts)
         classification_weights = self._compute_weights(classification_class_counts)
 
-        print(f'Distribución de: semantic_labels:')
+        print(f'Distribution of: semantic_labels:')
         total_points = semantic_class_counts.sum()
         for cls in self._cfg.dataset.semantic_classes:
-            print(f'\t* {cls.name} ({cls.id}): {semantic_class_counts[cls.id]:.0f} puntos ({(semantic_class_counts[cls.id] / total_points * 100):.2f} %), weight: {semantic_weights[cls.id]:.4f}.')
+            print(f'\t* {cls.name} ({cls.id}): {semantic_class_counts[cls.id]:.0f} points ({(semantic_class_counts[cls.id] / total_points * 100):.2f} %), weight: {semantic_weights[cls.id]:.4f}.')
         
-        print(f'Distribución de: classification_labels:')
+        print(f'Distribution of: classification_labels:')
         total_points = classification_class_counts.sum()
         for cls in self._cfg.dataset.instance_classes:
             if cls.id == 0:
                 continue
 
-            print(f'\t* {cls.name} ({cls.id}): {classification_class_counts[cls.id - 1]:.0f} puntos ({(classification_class_counts[cls.id - 1] / total_points * 100):.2f} %), weight: {classification_weights[cls.id - 1]:.4f}.')
+            print(f'\t* {cls.name} ({cls.id}): {classification_class_counts[cls.id - 1]:.0f} points ({(classification_class_counts[cls.id - 1] / total_points * 100):.2f} %), weight: {classification_weights[cls.id - 1]:.4f}.')
 
         self._criterion_semantic = nn.CrossEntropyLoss(weight=semantic_weights)
         self._criterion_classification = nn.CrossEntropyLoss(weight=classification_weights)
@@ -150,8 +147,8 @@ class Panoramix3DTrainer:
         total_params = sum(p.numel() for p in self._model.parameters())
         trainable_params = sum(p.numel() for p in self._model.parameters() if p.requires_grad)
 
-        print(f"Parámetros totales: {total_params:,}")
-        print(f"Parámetros entrenables: {trainable_params:,}")
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
 
         print('Resnet generates features at the following scales:')
         scales = [1, 1, 1]
@@ -288,14 +285,14 @@ class Panoramix3DTrainer:
         loss_sem = self._criterion_semantic(semantic_output.F, semantic_labels.F) * self._cfg.trainer.loss_coeffs.semantic_loss_coeff
         loss_classification = self._criterion_classification(classification_output.F, classification_labels.F) * self._cfg.trainer.loss_coeffs.classification_loss_coeff
         loss_centroid = self._criterion_centroid(centroid_score_output.F, centroid_score_labels.F) * self._cfg.trainer.loss_coeffs.centroid_loss_coeff
-        loss_offset_norm, loss_offset_dir = self._criterion_offset(offset_output.F, offset_labels.F)
+        loss_offset_norm, loss_offset_dir = self._criterion_offset(offset_output.F, offset_labels.F, offset_labels.F.shape[0])
         loss_inst, remap_info = self._criterion_instance(instance_output,
                                                          instance_labels,
                                                          centroid_batches=centroid_confidences.C[:, 0])
 
         loss_offset_norm *= self._cfg.trainer.loss_coeffs.offset_norm_loss_coeff
         loss_offset_dir *= self._cfg.trainer.loss_coeffs.offset_dir_loss_coeff
-        total_loss_offset = loss_offset_norm + loss_offset_dir
+        total_loss_offset = (loss_offset_norm + loss_offset_dir) * self._cfg.trainer.loss_coeffs.offset_loss_coeff
         total_loss_inst = loss_inst['total_loss'] * self._cfg.trainer.loss_coeffs.instance_loss_coeff
         total_loss = loss_sem + loss_classification + loss_centroid + total_loss_offset + total_loss_inst
 
@@ -843,6 +840,8 @@ class Panoramix3DTrainer:
             self._freeze_params(self._model.centroid_head, 'centroid' in freeze_modules)
             self._freeze_params(self._model.instance_head, 'instance' in freeze_modules)
 
+            self._bn_scheduler.step()
+
             print(f'\n=== Starting epoch {epoch + 1} / {self._cfg.trainer.num_epochs} ===')
             print(f' * Freeze modules: {freeze_modules}')
 
@@ -945,7 +944,7 @@ class Panoramix3DTrainer:
                 stats['instance_f1'].append(result['stat']['instance_f1'])
 
                 self._log_stats(result['loss'], result['stat'], epoch * len(data_loader) + pbar.n, prefix='Val')
-                self._log_pointclouds(epoch * len(data_loader) + pbar.n, result)
+                # self._log_pointclouds(epoch * len(data_loader) + pbar.n, result)
 
         stats = {k: np.nanmean(np.where(np.array(v) != 0.0, np.array(v), np.nan), axis=0) for k, v in stats.items()}
         # stats = {k: np.array(v).mean(axis=0) for k, v in stats.items()}

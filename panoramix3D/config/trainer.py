@@ -4,40 +4,35 @@ from typing import Literal, Union, Annotated
 from . import StrictModel, _load_yaml_with_includes
 
 
-# class TrainScheduleConfig(StrictModel):
-#     epochs: int = Field(..., ge=0, description="Number of epochs to train for (int >= 0).")
-#     lr_scale: float = Field(..., gt=0, description="Learning rate scale factor (float > 0).")
-#     freeze_modules: list[Literal['backbone', 'semantic', 'classification', 'offset', 'centroid', 'instance']] = Field(..., description="List of modules to freeze (list of strings).")
-
-#     @field_validator('freeze_modules')
-#     @classmethod
-#     def _no_dupes_or_all(cls, v: list[Literal['backbone', 'semantic', 'classification', 'offset', 'centroid', 'instance']]):
-#         if len(v) != len(set(v)):
-#             raise ValueError('freeze_modules must not contain duplicate entries.')
-#         if len(v) >= 5:
-#             raise ValueError('freeze_modules must not contain all entries.')
-#         return v
-    
-class ExponentialLRParams(StrictModel):
-    gamma: float = Field(0.95, gt=0, lt=1, description="Exponential decay factor (0 < gamma < 1).")
-
-
 class ExponentialLRConfig(StrictModel):
     type: Literal['ExponentialLR']
-    params: ExponentialLRParams
-
-
-class DummyLRParams(StrictModel):
-    pass
+    gamma: float = Field(0.95, gt=0, lt=1, description="Exponential decay factor (0 < gamma < 1).")
 
 
 class DummyLRConfig(StrictModel):
     type: Literal['DummyLR']
-    params: DummyLRParams
 
 
 LRScheduleConfig = Annotated[
     Union[ExponentialLRConfig, DummyLRConfig],
+    Field(discriminator='type')
+]
+
+
+class StepDecayBNConfig(StrictModel):
+    type: Literal['StepDecay']
+    bn_momentum: float = Field(0.1, gt=0, lt=1, description="Initial batch norm momentum (0 < bn_momentum < 1).")
+    bn_decay: float = Field(0.5, gt=0, lt=1, description="Batch norm momentum decay factor (0 < bn_decay < 1).")
+    decay_step: int = Field(4, gt=0, description="Number of epochs between each decay (int > 0).")
+    bn_clip: float = Field(1e-2, gt=0, lt=1, description="Minimum batch norm momentum (0 < bn_clip < 1).")
+
+
+class DummyBNConfig(StrictModel):
+    type: Literal['DummyBN']
+
+
+BNScheduleConfig = Annotated[
+    Union[StepDecayBNConfig, DummyBNConfig],
     Field(discriminator='type')
 ]
 
@@ -92,6 +87,7 @@ class TrainerConfig(StrictModel):
     weight_decays: WeightDecaysConfig = Field(default_factory=WeightDecaysConfig, description="Weight decays for different model components.")
     learning_rates: LearningRatesConfig = Field(default_factory=LearningRatesConfig, description="Learning rates for different model components.")
     lr_scheduler: LRScheduleConfig = Field(..., description="Learning rate schedule configuration.")
+    bn_scheduler: BNScheduleConfig = Field(..., description="Batch normalization schedule configuration.")
     class_weights: Literal['none', 'sqrt', 'log'] = Field('none', description="Class weights strategy for loss functions ('none', 'sqrt', or 'log').")
 
     @classmethod

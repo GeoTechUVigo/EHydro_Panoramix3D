@@ -16,7 +16,7 @@ classification_head:
 centroid_head:
   instance_density: 0.01
   score_thres: 0.2
-  centroid_thres: 0.3
+  centroid_thres: 0.4
   max_instances_per_scene: 64
 instance_head:
   descriptor_dim: 8

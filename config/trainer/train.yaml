@@ -1,16 +1,16 @@
 root: /home/samuel/Panoramix3D_data
-version_name: 'Panoramix3D_ehydro_6C_V2'
+version_name: 'Panoramix3D_ehydro_6C_V4'
 mode: 'train'
 batch_size: 16
-start_epoch: 0
-num_epochs: 50
+start_epoch: 53
+num_epochs: 100
 num_workers: 4
 loss_coeffs:
   semantic_loss_coeff: 10.0
   classification_loss_coeff: 3.0
   centroid_loss_coeff: 2.0
   offset_loss_coeff: 1.0
-  offset_norm_loss_coeff: 1.0
+  offset_norm_loss_coeff: 0.25
   offset_dir_loss_coeff: 1.0
   instance_loss_coeff: 1.0
   instance_matched_loss_coeff: 0.5
@@ -24,8 +24,8 @@ freeze_modules:
     epochs: 5
 weight_decays:
   backbone: 1e-2
-  semantic: 1e-1
-  classification: 1e-1
+  semantic: 1e-2
+  classification: 1e-2
   offset: 1e-2
   centroid: 1e-2
   instance: 1e-2
@@ -33,11 +33,15 @@ learning_rates:
   backbone: 1e-4
   semantic: 1e-3
   classification: 1e-3
-  offset: 5e-4
-  centroid: 5e-4
+  offset: 1e-3
+  centroid: 1e-3
   instance: 1e-3
 lr_scheduler:
   type: ExponentialLR
-  params:
-    gamma: 0.954992586021436
+  gamma: 0.954992586021436
+bn_scheduler:
+  type: StepDecay
+  bn_momentum: 0.1
+  bn_decay: 0.5
+  decay_step: 4
 class_weights: 'sqrt'

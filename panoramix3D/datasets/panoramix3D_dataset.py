@@ -322,9 +322,8 @@ class Panoramix3DDataset(Dataset):
         """
         coords, feat, semantic_labels, instance_labels, classification_labels = self._load_file(self._files[idx % len(self._files)])
         current_file = self._files[idx % len(self._files)]
-        if idx >= len(self._files):
-            coords = self._augment_data(coords)
-
+        # if idx >= len(self._files):
+        coords = self._augment_data(coords)
         coords -= np.min(coords, axis=0, keepdims=True)
 
         voxels, indices = sparse_quantize(coords, self._cfg.voxel_size, return_index=True)
@@ -334,7 +333,7 @@ class Panoramix3DDataset(Dataset):
         classification_labels = classification_labels[indices]
 
         sizes = np.bincount(instance_labels)[instance_labels]
-        size_mask = (sizes >= self._cfg.min_tree_voxels) # & ((instance_labels != 0) | (semantic_labels == 0))
+        size_mask = (sizes >= self._cfg.min_tree_voxels)
         consistent_mask = (semantic_labels != 4) | (instance_labels > 0)
         mask = size_mask & consistent_mask
         voxels = voxels[mask]
