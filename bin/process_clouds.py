@@ -82,11 +82,11 @@ class CloudProcessor:
                     voxels -= min_coords
 
                     intensity = np.array(chunk.intensity)[:, None]
-                    #red = np.array(chunk.red)[:, None]
-                    #green = np.array(chunk.green)[:, None]
-                    #blue = np.array(chunk.blue)[:, None]
-                    #feats = np.hstack((intensity, red, green, blue))
-                    feats = (intensity - intensity.min()) / (intensity.max() - intensity.min())
+                    intensity = (intensity - intensity.min()) / (intensity.max() - intensity.min())
+                    red = np.array(chunk.red)[:, None]
+                    green = np.array(chunk.green)[:, None]
+                    blue = np.array(chunk.blue)[:, None]
+                    feats = np.hstack((intensity, red, green, blue))
 
                     voxels, indices, inverse_map = sparse_quantize(voxels, self._voxel_size, return_index=True, return_inverse=True)
                     feats = feats[indices]
