@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 from .utils import sparse_unique_id_collate_fn
 
-from ..datasets import Panoramix3DDataset
+from ..datasets import EHydroDataset, ScanNetDataset, S3DISDataset
 from ..models import Panoramix3D
 from ..modules import CenterNetFocalLoss, HungarianInstanceLoss, OffsetLoss
 from ..schedulers import build_lr_scheduler, build_bn_scheduler
@@ -83,6 +83,15 @@ class Panoramix3DTrainer:
             self._cfg.model.weights_file = None
         else:
             self._cfg.model.weights_file = self._weights_folder / f'{self._cfg.trainer.version_name}.pth'
+
+        if self._cfg.dataset.name == 'EHydroDataset':
+            self._dataset_class = EHydroDataset
+        elif self._cfg.dataset.name == 'ScanNetDataset':
+            self._dataset_class = ScanNetDataset
+        elif self._cfg.dataset.name == 'S3DISDataset':
+            self._dataset_class = S3DISDataset
+        else:
+            raise ValueError(f'Unsupported dataset: {self._cfg.dataset.name}!')
 
         self._model = Panoramix3D.from_config(self._cfg.model).to(device=self._device)
         self._optimizer = torch.optim.AdamW([
@@ -177,7 +186,7 @@ class Panoramix3DTrainer:
             Tensor of class counts for each semantic and classification class
         """
 
-        dataset = Panoramix3DDataset(self._cfg.dataset, split='train')
+        dataset = self._dataset_class(self._cfg.dataset, split='train')
         semantic_counts = torch.zeros(self._cfg.model.semantic_head.num_classes, dtype=torch.float32, device=self._device)
         classification_counts = torch.zeros(self._cfg.model.classification_head.num_classes, dtype=torch.float32, device=self._device)
 
@@ -819,7 +828,7 @@ class Panoramix3DTrainer:
         different learning rates and frozen modules for sophisticated fine-tuning
         strategies. Saves checkpoints after each epoch and final weights at completion.
         """
-        dataset = Panoramix3DDataset(self._cfg.dataset, split='train')
+        dataset = self._dataset_class(self._cfg.dataset, split='train')
         data_loader = DataLoader(
             dataset,
             batch_size=self._cfg.trainer.batch_size,
@@ -885,7 +894,7 @@ class Panoramix3DTrainer:
             Iterator of validation results containing predictions and ground truth
             for comprehensive evaluation and analysis.
         """
-        dataset = Panoramix3DDataset(self._cfg.dataset, split='val')
+        dataset = self._dataset_class(self._cfg.dataset, split='val')
         data_loader = DataLoader(
             dataset,
             batch_size=self._cfg.trainer.batch_size,

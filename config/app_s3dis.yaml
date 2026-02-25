@@ -1,0 +1,5 @@
+name: Panoramix3D
+description: Panoramix3D configuration file
+model: !include model/model_s3dis.yaml
+dataset: !include data/s3dis_dataset.yaml
+trainer: !include trainer/train.yaml

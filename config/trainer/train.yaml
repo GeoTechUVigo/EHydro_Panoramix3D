@@ -1,8 +1,8 @@
 root: /home/samuel/Panoramix3D_data
-version_name: 'Panoramix3D_ehydro_6C_V4'
+version_name: 'Panoramix3D_ehydro_6C_V1'
 mode: 'train'
 batch_size: 16
-start_epoch: 53
+start_epoch: 0
 num_epochs: 100
 num_workers: 4
 loss_coeffs:
