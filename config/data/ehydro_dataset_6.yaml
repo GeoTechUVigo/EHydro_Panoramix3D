@@ -1,7 +1,7 @@
 name: EHydroDataset
 root: /home/samuel/Panoramix3D_data/datasets/EHydroDataset/processed
 
-voxel_size: 0.3
+voxel_size: 0.5
 centroid_sigma_min: 1.0
 centroid_sigma_max: 4.0
 centroid_sigma_divisor: 18.0

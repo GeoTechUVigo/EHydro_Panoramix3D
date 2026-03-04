@@ -10,6 +10,7 @@ feat_keys:
   - red
   - green
   - blue
+foreground_classes: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 semantic_classes:
   - name: ceiling
     id: 0

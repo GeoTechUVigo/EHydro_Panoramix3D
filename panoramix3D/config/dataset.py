@@ -81,6 +81,7 @@ class DatasetConfig(StrictModel):
     feat_keys: List[str] = Field(['intensity'], description="List of feature keys.")
     semantic_classes: List[SemanticClassConfig] = Field(..., min_length=2, description="List of semantic classes (Min 2).")
     instance_classes: List[InstanceClassConfig] = Field(..., min_length=2, description="List of instance classes.")
+    foreground_classes: List[int] = Field(default_factory=list, description="List of semantic class IDs that have instances (foreground).")
     splits: SplitsConfig = Field(..., description="Dataset splits configuration.")
 
     @field_validator("semantic_classes")

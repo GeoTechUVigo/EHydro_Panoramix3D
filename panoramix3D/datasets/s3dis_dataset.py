@@ -84,8 +84,21 @@ class S3DISDataset(Panoramix3DDataset):
         semantic_labels = np.load(path / 'segment.npy').squeeze(-1)
         instance_labels = np.load(path / 'instance.npy').squeeze(-1) + 1
 
-        ## TODO: Set instance labels to 0 for stuff classes.
-        ## TODO: Add classification labels if needed, currently set to ones.
-        classification_labels = np.ones_like(instance_labels)
+        # Remap instance labels to consecutive indices starting from 1
+        unique_instances = np.unique(instance_labels)
+        unique_instances = unique_instances[unique_instances > 0]  # Exclude instance 0 (background)
+        instance_mapping = {old_id: new_id for new_id, old_id in enumerate(unique_instances, start=1)}
+        instance_mapping[0] = 0  # Keep 0 as background
+        
+        instance_labels_remap = np.zeros_like(instance_labels)
+        for old_id, new_id in instance_mapping.items():
+            instance_labels_remap[instance_labels == old_id] = new_id
+        
+        # Set instance labels to 0 for stuff classes (not in foreground_classes)
+        if self._cfg.foreground_classes:
+            foreground_mask = np.isin(semantic_labels, self._cfg.foreground_classes)
+            instance_labels_remap[~foreground_mask] = 0
+        
+        classification_labels = np.ones_like(instance_labels_remap)
 
-        return coords, feats, semantic_labels, instance_labels, classification_labels
+        return coords, feats, semantic_labels, instance_labels_remap, classification_labels
