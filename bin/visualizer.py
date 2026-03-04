@@ -24,20 +24,20 @@ class Visualizer:
         self._dataset = self._dataset_class(self._cfg, split=split)
 
         # Print class distribution for all scenes in the dataset
-        print("Dataset Class Distribution:")
-        total_points = 0
-        class_counts = np.zeros(len(self._cfg.semantic_classes), dtype=int)
-        for scene in self._dataset:
-            semantic_labels = scene['semantic_labels']
-            unique, counts = np.unique(semantic_labels.F.cpu().numpy(), return_counts=True)
-            total_points += len(semantic_labels.F.cpu().numpy())
-            for cls_id, count in zip(unique, counts):
-                class_counts[cls_id] += count
+        # print("Dataset Class Distribution:")
+        # total_points = 0
+        # class_counts = np.zeros(len(self._cfg.semantic_classes), dtype=int)
+        # for scene in self._dataset:
+        #     semantic_labels = scene['semantic_labels']
+        #     unique, counts = np.unique(semantic_labels.F.cpu().numpy(), return_counts=True)
+        #     total_points += len(semantic_labels.F.cpu().numpy())
+        #     for cls_id, count in zip(unique, counts):
+        #         class_counts[cls_id] += count
 
-        for cls_id, count in enumerate(class_counts):
-            cls_name = self._cfg.semantic_classes[cls_id].name
-            percentage = (count / total_points) * 100
-            print(f"  {cls_name} (ID: {cls_id}): {count} points ({percentage:.2f}%)")
+        # for cls_id, count in enumerate(class_counts):
+        #     cls_name = self._cfg.semantic_classes[cls_id].name
+        #     percentage = (count / total_points) * 100
+        #     print(f"  {cls_name} (ID: {cls_id}): {count} points ({percentage:.2f}%)")
 
         self._vis = o3d.visualization.VisualizerWithKeyCallback()
         self._vis.create_window(window_name='Panoramix3D Dataset Visualizer', width=800, height=600)
@@ -62,31 +62,22 @@ class Visualizer:
             green_idx = self._cfg.feat_keys.index('green')
             blue_idx = self._cfg.feat_keys.index('blue')
             rgb_values = features[:, [red_idx, green_idx, blue_idx]]
-            
-            # Detect bit depth based on max value
+
             max_value = rgb_values.max()
             if max_value > 255:
-                # 16-bit color (0-65535)
                 colors = rgb_values / 65535.0
-                print(f'16-bit color (max: {max_value})')
             else:
-                # 8-bit color (0-255)
                 colors = rgb_values / 255.0
-                print(f'8-bit color (max: {max_value})')
         elif 'intensity' in self._cfg.feat_keys:
             intensity_idx = self._cfg.feat_keys.index('intensity')
             intensity = features[:, intensity_idx]
             max_intensity = intensity.max()
             if max_intensity > 255:
-                # 16-bit intensity
                 colors = plt.get_cmap('gray')(intensity / 65535.0)[:, :3]
             else:
-                # 8-bit intensity
                 colors = plt.get_cmap('gray')(intensity / 255.0)[:, :3]
-            print(f'intensity (max: {max_intensity})')
         else:
             colors = np.zeros((features.shape[0], 3))
-            print('default colors')
 
         return o3d.utility.Vector3dVector(colors)
 

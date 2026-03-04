@@ -61,7 +61,7 @@ instance_classes:
 splits:
   train:
     data_augmentation:
-      coef: 1
+      coef: 4
       yaw_range: [0.0, 360.0]
       tilt_range: [-5.0, 5.0]
       scale_range: [0.9, 1.3]

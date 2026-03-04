@@ -208,7 +208,7 @@ class Panoramix3DTrainer:
             Tensor of class weights
         """
 
-        weights = class_counts.mean() / class_counts
+        weights = class_counts.mean() / class_counts.clamp(min=1)
         if self._cfg.trainer.class_weights == 'sqrt':
             weights = torch.sqrt(weights).to(self._device)
         elif self._cfg.trainer.class_weights == 'log':
@@ -438,6 +438,105 @@ class Panoramix3DTrainer:
 
         return tp, fp, fn, iou.mean(), precision, recall, f1_score
 
+    @torch.no_grad()
+    def _compute_ap_metrics(
+        self,
+        instance_output: SparseTensor,
+        instance_labels: SparseTensor,
+        centroid_confidences: SparseTensor,
+        iou_thresholds: list = None
+    ) -> Dict:
+        """
+        Compute Average Precision (AP) metrics for instance segmentation following
+        the COCO evaluation protocol.
+
+        Predictions are sorted by centroid confidence (descending) and matched
+        greedily to ground-truth instances using a full pairwise IoU matrix between
+        predicted binary masks and ground-truth instance masks.
+
+        Args:
+            instance_output: Sparse tensor whose .F has shape [N_voxels, num_pred],
+                containing per-voxel logits for each predicted instance mask.
+            instance_labels: Sparse tensor whose .F has shape [N_voxels], containing
+                0-indexed GT instance ids (one id per foreground voxel).
+            centroid_confidences: Sparse tensor whose .F has shape [num_pred] or
+                [num_pred, 1], containing the confidence score of each prediction.
+            iou_thresholds: List of IoU thresholds to evaluate. Defaults to
+                COCO thresholds [0.50, 0.55, …, 0.95].
+
+        Returns:
+            Dict with keys:
+                'ap50'    – AP at IoU threshold 0.50
+                'ap75'    – AP at IoU threshold 0.75
+                'ap_coco' – mAP averaged over all supplied thresholds (COCO style)
+        """
+        if iou_thresholds is None:
+            iou_thresholds = [round(0.50 + 0.05 * i, 2) for i in range(10)]  # 0.50 … 0.95
+
+        nan_result = {'ap50': float('nan'), 'ap75': float('nan'), 'ap_coco': float('nan')}
+
+        num_pred = instance_output.F.size(1)
+        if num_pred == 0:
+            return nan_result
+
+        # Unique GT instance ids (filter out potential negative background ids)
+        uniq_gt = torch.unique(instance_labels.F)
+        uniq_gt = uniq_gt[uniq_gt >= 0]
+        num_gt = uniq_gt.size(0)
+        if num_gt == 0:
+            return nan_result
+
+        # Confidence scores per prediction, shape [num_pred]
+        confidences = centroid_confidences.F.squeeze(-1).float()  # [num_pred]
+
+        # Binary predicted masks: sigmoid > 0.5, shape [num_pred, N_voxels]
+        pred_masks = (instance_output.F.T.float().sigmoid() > 0.5)  # [num_pred, N]
+
+        # Binary GT masks, shape [num_gt, N_voxels]
+        gt_masks = (instance_labels.F.unsqueeze(0) == uniq_gt.unsqueeze(1)).float()  # [num_gt, N]
+
+        # IoU matrix [num_pred, num_gt] via matrix multiplication (memory-efficient)
+        pred_float = pred_masks.float()                                  # [num_pred, N]
+        intersection = pred_float @ gt_masks.T                           # [num_pred, num_gt]
+        pred_sum = pred_float.sum(-1, keepdim=True)                      # [num_pred, 1]
+        gt_sum  = gt_masks.sum(-1, keepdim=True)                         # [num_gt,   1]
+        union   = pred_sum + gt_sum.T - intersection                     # [num_pred, num_gt]
+        iou_matrix = (intersection / (union + 1e-6)).cpu().numpy()       # [num_pred, num_gt]
+
+        # Sort predictions by descending confidence
+        sort_idx = torch.argsort(confidences, descending=True).cpu().numpy()
+        sorted_iou = iou_matrix[sort_idx]  # [num_pred, num_gt]
+
+        ap_values = []
+        for thresh in iou_thresholds:
+            tp_flags   = np.zeros(num_pred, dtype=np.float32)
+            matched_gt: set = set()
+
+            for i in range(num_pred):
+                best_gt  = int(np.argmax(sorted_iou[i]))
+                best_iou = sorted_iou[i, best_gt]
+                if best_iou >= thresh and best_gt not in matched_gt:
+                    tp_flags[i] = 1.0
+                    matched_gt.add(best_gt)
+
+            cumsum_tp = np.cumsum(tp_flags)
+            precision = cumsum_tp / np.arange(1, num_pred + 1, dtype=np.float32)
+            recall    = cumsum_tp / num_gt
+
+            # 101-point COCO-style interpolation
+            ap = sum(
+                float(precision[recall >= t].max()) if (recall >= t).any() else 0.0
+                for t in np.linspace(0.0, 1.0, 101)
+            ) / 101.0
+            ap_values.append(ap)
+
+        ap_array = np.array(ap_values)
+        return {
+            'ap50':    float(ap_array[0]),   # threshold = 0.50
+            'ap75':    float(ap_array[5]),   # threshold = 0.75
+            'ap_coco': float(ap_array.mean())
+        }
+
     @torch.no_grad()    
     def _compute_metrics(
             self,
@@ -453,6 +552,9 @@ class Panoramix3DTrainer:
         """
         Compute comprehensive evaluation metrics for all tasks including semantic
         segmentation, centroid detection, and instance segmentation performance.
+
+        Includes AP50, AP75, and AP_COCO (COCO-style mAP over IoU 0.50–0.95)
+        computed via greedy confidence-sorted matching on full pairwise IoU matrices.
         
         Args:
             semantic_output: Model predictions for semantic segmentation
@@ -473,6 +575,11 @@ class Panoramix3DTrainer:
             instance_labels,
             iou_thresh=0.5,
             remap_info=remap_info
+        )
+        ap_metrics = self._compute_ap_metrics(
+            instance_output=instance_output,
+            instance_labels=instance_labels,
+            centroid_confidences=centroid_confidences
         )
 
         return {
@@ -512,7 +619,10 @@ class Panoramix3DTrainer:
             'instance_iou': iou.item(),
             'instance_precision': instance_precision,
             'instance_recall': instance_recall,
-            'instance_f1': instance_f1
+            'instance_f1': instance_f1,
+            'ap50': ap_metrics['ap50'],
+            'ap75': ap_metrics['ap75'],
+            'ap_coco': ap_metrics['ap_coco']
         }
     
     def _forward_pass(self, feed_dict: dict, training: bool):
@@ -637,6 +747,9 @@ class Panoramix3DTrainer:
         self._writer.add_scalar(f'{prefix}_Instance/2/Instance_Precision', stat['instance_precision'], step)
         self._writer.add_scalar(f'{prefix}_Instance/3/Instance_Recall', stat['instance_recall'], step)
         self._writer.add_scalar(f'{prefix}_Instance/4/Instance_F1', stat['instance_f1'], step)
+        self._writer.add_scalar(f'{prefix}_Instance/5/AP50', stat['ap50'], step)
+        self._writer.add_scalar(f'{prefix}_Instance/6/AP75', stat['ap75'], step)
+        self._writer.add_scalar(f'{prefix}_Instance/7/AP_COCO', stat['ap_coco'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/1/Backbone_LR', self._optimizer.param_groups[0]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/2/Semantic_LR', self._optimizer.param_groups[1]['lr'], step)
         self._writer.add_scalar(f'{prefix}_Learning_Rate/3/Classification_LR', self._optimizer.param_groups[2]['lr'], step)
@@ -668,8 +781,10 @@ class Panoramix3DTrainer:
 
         self._writer.add_text('Val_Classification/Mean_Results', header + row, step)
 
-        header = 'IoU | Precision | Recall | F1 |\n|-|-|-|-|\n'
-        row = f'{stats["instance_iou"]:.3f} | {stats["instance_precision"]:.3f} | {stats["instance_recall"]:.3f} | {stats["instance_f1"]:.3f} |\n'
+        header = 'IoU | Precision | Recall | F1 | AP50 | AP75 | AP_COCO |\n|-|-|-|-|-|-|-|\n'
+        row = (f'{stats["instance_iou"]:.3f} | {stats["instance_precision"]:.3f} | '
+               f'{stats["instance_recall"]:.3f} | {stats["instance_f1"]:.3f} | '
+               f'{stats["ap50"]:.3f} | {stats["ap75"]:.3f} | {stats["ap_coco"]:.3f} |\n')
 
         self._writer.add_text('Val_Instance/Mean_Results', header + row, step)
 
@@ -917,7 +1032,10 @@ class Panoramix3DTrainer:
             'instance_iou': [],
             'instance_precision': [],
             'instance_recall': [],
-            'instance_f1': []
+            'instance_f1': [],
+            'ap50': [],
+            'ap75': [],
+            'ap_coco': []
         }
 
         # enable torchsparse 2.0 inference
@@ -951,6 +1069,9 @@ class Panoramix3DTrainer:
                 stats['instance_precision'].append(result['stat']['instance_precision'])
                 stats['instance_recall'].append(result['stat']['instance_recall'])
                 stats['instance_f1'].append(result['stat']['instance_f1'])
+                stats['ap50'].append(result['stat']['ap50'])
+                stats['ap75'].append(result['stat']['ap75'])
+                stats['ap_coco'].append(result['stat']['ap_coco'])
 
                 self._log_stats(result['loss'], result['stat'], epoch * len(data_loader) + pbar.n, prefix='Val')
                 # self._log_pointclouds(epoch * len(data_loader) + pbar.n, result)
