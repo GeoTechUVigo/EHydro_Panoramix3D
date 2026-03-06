@@ -379,6 +379,11 @@ class Panoramix3DTrainer:
         Returns:
             Tuple of (IoU, precision, recall, F1) tensors for each class
         """
+        if classification_output.F.shape[0] == 0:
+            num_cls = self._cfg.model.classification_head.num_classes
+            nan = torch.full((num_cls,), float('nan'), device=self._device)
+            return nan, nan.clone(), nan.clone(), nan.clone()
+
         classification_iou = self._metric_classification_iou(classification_output.F, classification_labels.F)
 
         classification_precision = self._metric_classification_precision(classification_output.F, classification_labels.F)
@@ -412,7 +417,7 @@ class Panoramix3DTrainer:
             Tuple of (TP, FP, FN, iou.mean(), precision, recall, F1) metrics
         """
         if remap_info['num_instances'] == 0:
-            return 0, 0, 0, float('nan'), float('nan'), float('nan'), float('nan')
+            return 0, 0, 0, torch.tensor(float('nan'), device=instance_output.F.device), float('nan'), float('nan'), float('nan')
         
         instance_output_remap = torch.zeros((instance_output.F.size(0), remap_info['num_instances']), device=instance_output.F.device, dtype=instance_output.F.dtype)
         instance_output_remap[:, remap_info['gt_indices']] = instance_output.F[:, remap_info['pred_indices']]
@@ -1076,6 +1081,7 @@ class Panoramix3DTrainer:
                 self._log_stats(result['loss'], result['stat'], epoch * len(data_loader) + pbar.n, prefix='Val')
                 # self._log_pointclouds(epoch * len(data_loader) + pbar.n, result)
 
-        stats = {k: np.nanmean(np.where(np.array(v) != 0.0, np.array(v), np.nan), axis=0) for k, v in stats.items()}
+        with np.errstate(all='ignore'):
+            stats = {k: np.nanmean(np.where(np.array(v) != 0.0, np.array(v), np.nan), axis=0) for k, v in stats.items()}
         # stats = {k: np.array(v).mean(axis=0) for k, v in stats.items()}
         self._log_mean_stats(epoch, stats)

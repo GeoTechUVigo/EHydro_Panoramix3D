@@ -1,5 +1,5 @@
 root: /home/samuel/Panoramix3D_data
-version_name: 'Panoramix3D_s3dis_6C_V1'
+version_name: 'Panoramix3D_s3dis_6C_V3'
 mode: 'train'
 batch_size: 2
 start_epoch: 0

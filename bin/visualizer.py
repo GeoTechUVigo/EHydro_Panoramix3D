@@ -23,21 +23,7 @@ class Visualizer:
         
         self._dataset = self._dataset_class(self._cfg, split=split)
 
-        # Print class distribution for all scenes in the dataset
-        # print("Dataset Class Distribution:")
-        # total_points = 0
-        # class_counts = np.zeros(len(self._cfg.semantic_classes), dtype=int)
-        # for scene in self._dataset:
-        #     semantic_labels = scene['semantic_labels']
-        #     unique, counts = np.unique(semantic_labels.F.cpu().numpy(), return_counts=True)
-        #     total_points += len(semantic_labels.F.cpu().numpy())
-        #     for cls_id, count in zip(unique, counts):
-        #         class_counts[cls_id] += count
-
-        # for cls_id, count in enumerate(class_counts):
-        #     cls_name = self._cfg.semantic_classes[cls_id].name
-        #     percentage = (count / total_points) * 100
-        #     print(f"  {cls_name} (ID: {cls_id}): {count} points ({percentage:.2f}%)")
+        self._print_dataset_info()
 
         self._vis = o3d.visualization.VisualizerWithKeyCallback()
         self._vis.create_window(window_name='Panoramix3D Dataset Visualizer', width=800, height=600)
@@ -55,6 +41,58 @@ class Visualizer:
 
         self._current_idx = 0
         self._current_scene = self._dataset[self._current_idx]
+
+    def _print_dataset_info(self):
+        # Print class distribution for all scenes in the dataset
+        print("Dataset Class Distribution:")
+        total_points = 0
+        class_counts = np.zeros(len(self._cfg.semantic_classes), dtype=int)
+        sqrt_areas = []
+        for i in range(len(self._dataset._files)):
+            scene = self._dataset[i]
+            semantic_labels = scene['semantic_labels']
+            unique, counts = np.unique(semantic_labels.F.cpu().numpy(), return_counts=True)
+            total_points += len(semantic_labels.F.cpu().numpy())
+            for cls_id, count in zip(unique, counts):
+                class_counts[cls_id] += count
+
+            C = scene['inputs'].C.cpu().numpy()  # [N, 3] integer voxel coords
+            x_extent = (C[:, 0].max() - C[:, 0].min()) * self._cfg.voxel_size
+            y_extent = (C[:, 1].max() - C[:, 1].min()) * self._cfg.voxel_size
+            sqrt_areas.append(np.sqrt(x_extent * y_extent))
+
+        for cls_id, count in enumerate(class_counts):
+            cls_name = self._cfg.semantic_classes[cls_id].name
+            percentage = (count / total_points) * 100
+            print(f"  {cls_name} (ID: {cls_id}): {count} points ({percentage:.2f}%)")
+
+        sqrt_areas = np.array(sqrt_areas)
+        print(f"\nScene size distribution (√2D area) — {len(sqrt_areas)} scenes:")
+        print(f"  min:    {sqrt_areas.min():.1f} m")
+        print(f"  max:    {sqrt_areas.max():.1f} m")
+        print(f"  mean:   {sqrt_areas.mean():.1f} m")
+        print(f"  median: {np.median(sqrt_areas):.1f} m")
+
+        large = []
+        for i in range(len(sqrt_areas)):
+            if sqrt_areas[i] > 15.0:
+                entry = self._dataset._files[i]
+                path = entry[0] if isinstance(entry, tuple) else entry
+                large.append((path, sqrt_areas[i]))
+        print(f"\nScenes with √(2D area) > 10 m: {len(large)}")
+        for path, area in sorted(large, key=lambda x: -x[1]):
+            print(f"  {area:.1f} m  —  {path}")
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.hist(sqrt_areas, bins=30, edgecolor='black')
+        ax.set_xlabel('√(2D area) [m]')
+        ax.set_ylabel('Scenes')
+        ax.set_title('Scene size distribution — train split')
+        ax.axvline(sqrt_areas.mean(), color='red', linestyle='--', label=f'mean = {sqrt_areas.mean():.1f} m')
+        ax.axvline(np.median(sqrt_areas), color='orange', linestyle='--', label=f'median = {np.median(sqrt_areas):.1f} m')
+        ax.legend()
+        plt.tight_layout()
+        plt.show()
 
     def _get_colors(self, features):
         if set(['red', 'green', 'blue']).issubset(self._cfg.feat_keys):
